@@ -149,8 +149,8 @@ earthGroup.add(lineSegments(grid.coastEdges, R * 1.004, COL_CYAN, 0.95));
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   const m = new THREE.MeshBasicMaterial({
-    color: COL_CYAN, transparent: true, opacity: 0.1,
-    blending: THREE.AdditiveBlending, depthWrite: false,
+    color: new THREE.Color('#134d63'), transparent: true, opacity: 0.55,
+    depthWrite: false,
   });
   earthGroup.add(new THREE.Mesh(g, m));
 }
@@ -274,18 +274,22 @@ function setHover(cell: Cell | null) {
 }
 
 // ---------- 交互：拖拽旋转（带惯性）、滚轮缩放、悬停拾取 ----------
+// 相机绕地球做轨道运动：拖拽改变经纬角，星空/轨道环随之产生视差
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let dragging = false;
 let lastX = 0, lastY = 0;
-let velX = 0, velY = 0; // 惯性角速度
+let velYaw = 0, velPitch = 0; // 惯性角速度
+let camYaw = 0;
+let camPitch = 0.18;
+const PITCH_LIMIT = 1.45;
 let camDist = 3.15;
 let camDistTarget = 3.15;
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
   dragging = true;
   lastX = e.clientX; lastY = e.clientY;
-  velX = 0; velY = 0;
+  velYaw = 0; velPitch = 0;
 });
 window.addEventListener('pointerup', () => (dragging = false));
 window.addEventListener('pointermove', (e) => {
@@ -296,20 +300,27 @@ window.addEventListener('pointermove', (e) => {
   const dy = e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
   const k = 0.0052 * (camDist / 3.15);
-  rotateEarth(dx * k, dy * k);
-  velX = dx * k; velY = dy * k;
+  orbitCamera(-dx * k, dy * k);
+  velYaw = -dx * k; velPitch = dy * k;
 });
 renderer.domElement.addEventListener('wheel', (e) => {
   e.preventDefault();
   camDistTarget = THREE.MathUtils.clamp(camDistTarget * (1 + Math.sign(e.deltaY) * 0.12), 1.7, 4.6);
 }, { passive: false });
 
-function rotateEarth(ax: number, ay: number) {
-  // 绕相机空间的 up/right 轴旋转，符合直觉
-  const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ax);
-  const qy = new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion), ay);
-  earthGroup.quaternion.premultiply(qx).premultiply(qy);
+function orbitCamera(dYaw: number, dPitch: number) {
+  camYaw += dYaw;
+  camPitch = THREE.MathUtils.clamp(camPitch + dPitch, -PITCH_LIMIT, PITCH_LIMIT);
+}
+
+function updateCamera() {
+  const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
+  camera.position.set(
+    Math.sin(camYaw) * cp * camDist,
+    sp * camDist,
+    Math.cos(camYaw) * cp * camDist,
+  );
+  camera.lookAt(0, 0, 0);
 }
 
 function pickCell(): Cell | null {
@@ -349,20 +360,17 @@ function tick() {
   const t = clock.elapsedTime;
 
   // 惯性衰减
-  if (!dragging && (Math.abs(velX) > 1e-5 || Math.abs(velY) > 1e-5)) {
-    rotateEarth(velX, velY);
+  if (!dragging && (Math.abs(velYaw) > 1e-5 || Math.abs(velPitch) > 1e-5)) {
+    orbitCamera(velYaw, velPitch);
     const decay = Math.exp(-dt * 3.2);
-    velX *= decay; velY *= decay;
+    velYaw *= decay; velPitch *= decay;
   }
-  // 无操作时缓慢自转
-  if (!dragging && Math.abs(velX) < 1e-4) {
-    earthGroup.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dt * 0.03);
-  }
+  // 地球始终缓慢自转（不影响相机视角）
+  earthGroup.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), dt * 0.015);
 
-  // 缩放缓动
+  // 缩放缓动 + 相机位置更新
   camDist += (camDistTarget - camDist) * Math.min(1, dt * 6);
-  camera.position.setLength(camDist);
-  camera.lookAt(0, 0, 0);
+  updateCamera();
 
   // 轨道环缓慢转动 + 呼吸
   orbitRings.forEach((ring, i) => {
