@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>寰宇防线 // EARTH DEFENSE</title>
+  <style>
+    :root {
+      --c-cyan: #22d3ee;
+      --c-rose: #f43f5e;
+      --c-amber: #fbbf24;
+      --c-bg: #050810;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--c-bg); }
+    body {
+      font-family: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
+      color: var(--c-cyan);
+      user-select: none;
+    }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+
+    .hud { position: fixed; z-index: 10; pointer-events: none; }
+
+    #hud-top {
+      top: 24px; left: 28px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    #hud-title {
+      font-size: 20px; letter-spacing: 6px; font-weight: 600;
+      text-shadow: 0 0 12px rgba(34, 211, 238, 0.6);
+    }
+    #hud-title .en { color: rgba(34, 211, 238, 0.45); font-size: 12px; letter-spacing: 3px; }
+    #hud-sub {
+      font-size: 11px; letter-spacing: 2px; color: rgba(34, 211, 238, 0.55);
+      border-left: 2px solid rgba(34, 211, 238, 0.4);
+      padding-left: 8px;
+    }
+    #hud-sub .amber { color: var(--c-amber); }
+
+    #hud-cell {
+      right: 28px; top: 24px; text-align: right;
+      font-size: 11px; letter-spacing: 2px; line-height: 1.9;
+      color: rgba(34, 211, 238, 0.75);
+      opacity: 0; transition: opacity 0.2s ease;
+    }
+    #hud-cell.show { opacity: 1; }
+    #hud-cell .k { color: rgba(34, 211, 238, 0.4); }
+    #hud-cell .v-land { color: var(--c-amber); }
+
+    #hud-bottom {
+      bottom: 22px; left: 0; right: 0; text-align: center;
+      font-size: 10px; letter-spacing: 3px; color: rgba(34, 211, 238, 0.35);
+    }
+
+    .corner { position: fixed; width: 26px; height: 26px; z-index: 10; pointer-events: none;
+      border-color: rgba(34, 211, 238, 0.35); border-style: solid; border-width: 0; }
+    #c-tl { top: 14px; left: 14px; border-top-width: 1px; border-left-width: 1px; }
+    #c-tr { top: 14px; right: 14px; border-top-width: 1px; border-right-width: 1px; }
+    #c-bl { bottom: 14px; left: 14px; border-bottom-width: 1px; border-left-width: 1px; }
+    #c-br { bottom: 14px; right: 14px; border-bottom-width: 1px; border-right-width: 1px; }
+
+    #scanline {
+      position: fixed; inset: 0; z-index: 9; pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom, transparent 0px, transparent 3px, rgba(0, 0, 0, 0.12) 4px);
+      mix-blend-mode: multiply;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="scanline"></div>
+
+  <div class="hud" id="hud-top">
+    <div id="hud-title">寰宇防线 <span class="en">// EARTH DEFENSE</span></div>
+    <div id="hud-sub">M0 · 战术全息投影 <span class="amber">ONLINE</span></div>
+  </div>
+
+  <div class="hud" id="hud-cell">
+    <div><span class="k">SECTOR</span> <span id="cell-id">—</span></div>
+    <div><span class="k">TERRAIN</span> <span id="cell-terrain">—</span></div>
+  </div>
+
+  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · 悬停查看区块</div>
+
+  <div class="corner" id="c-tl"></div>
+  <div class="corner" id="c-tr"></div>
+  <div class="corner" id="c-bl"></div>
+  <div class="corner" id="c-br"></div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
