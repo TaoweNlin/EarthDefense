@@ -46,10 +46,17 @@ const GROUND_DEFS: Record<string, GroundDef> = {
   armored:   { hp: 170, speed: 0.055, armor: 8, reward: 32, size: 0.03 },
   splitter:  { hp: 75,  speed: 0.08,  armor: 0, reward: 18, size: 0.024 },  // 死后裂变
   swarmling: { hp: 25,  speed: 0.115, armor: 0, reward: 6,  size: 0.013 }, // 裂变产物
-  burrower:  { hp: 95,  speed: 0.07,  armor: 0, reward: 26, size: 0.024 }, // 周期性遁地免疫攻击
 };
-const BURROW_SURFACE = 2.8;  // 地表可被攻击时长
-const BURROW_UNDER = 1.8;    // 遁地免疫时长
+
+// 空中单位（立体防御的主角，只能被防空火力击落）
+const DIVER_HP = 60;
+const DIVER_REWARD = 22;
+const DIVER_IMPACT_DAMAGE = 20;   // 撞击城市伤害
+const GUNSHIP_HP = 170;
+const GUNSHIP_REWARD = 48;
+const GUNSHIP_HOVER = 1.16;       // 悬停高度
+const GUNSHIP_BOLT_DAMAGE = 4;
+const GUNSHIP_BOLT_INTERVAL = 2.4;
 
 const TRANSPORT_HP = 130;
 const TRANSPORT_REWARD = 45;   // 在轨击落 = 整船歼灭，重赏
@@ -111,7 +118,6 @@ interface Unit {
   type: string; def: GroundDef;
   mesh: THREE.Mesh; path: number[]; seg: number; t: number;
   hp: number; alive: boolean; pos: THREE.Vector3; slowUntilFrame: boolean;
-  burrowT: number; burrowed: boolean;
 }
 
 interface Satellite {
@@ -119,7 +125,7 @@ interface Satellite {
   e1: THREE.Vector3; e2: THREE.Vector3; angle: number; cooldown: number;
 }
 
-type OrbitalKind = 'transport' | 'jammer' | 'boss';
+type OrbitalKind = 'transport' | 'jammer' | 'boss' | 'diver' | 'gunship';
 interface Orbital {
   kind: OrbitalKind; hp: number; maxHp: number; alive: boolean;
   group: THREE.Group; pos: THREE.Vector3;
@@ -274,8 +280,9 @@ export class Game {
         break;
       }
       case 'capital': {
-        // 中心城场景：首都 + 环绕卫星城
+        // 中心城场景：孤城（cities=1）或首都 + 环绕卫星城
         const anchor = land[Math.floor(this.rand() * land.length)];
+        if (this.cfg.cities <= 1) { picked = [anchor]; break; }
         let around = land.filter((c) => c !== anchor && c.center.angleTo(anchor.center) <= 0.9);
         if (around.length < this.cfg.cities - 1) around = land.filter((c) => c !== anchor);
         picked = [anchor, ...this.farthestPick(around, this.cfg.cities - 1)];
@@ -831,6 +838,9 @@ export class Game {
     this.markers = [];
     this.pending = [];
     for (let j = 0; j < (cfg.jammers ?? 0); j++) this.spawnJammer();
+    for (let d = 0; d < (cfg.divers ?? 0); d++) this.spawnDiver(d);
+    for (let gs = 0; gs < (cfg.gunships ?? 0); gs++) this.spawnGunship();
+    if (cfg.gunships) this.banner('炮舰压顶', 'GUNSHIP ON STATION // 仅防空可拦截', false, 3000);
     if (cfg.boss) this.spawnBoss();
 
     this.launched++;
@@ -976,6 +986,93 @@ export class Game {
     return 1.55 - Math.max(0, (theta + 1.2) / 1.2) * 0.35;
   }
 
+  /** 俯冲艇：短暂绕行后直接俯冲撞击城市 */
+  private spawnDiver(delay: number) {
+    const targets = this.cities.filter((c) => c.alive);
+    if (!targets.length) return;
+    const city = targets[Math.floor(this.rand() * targets.length)];
+    const n = this.grid.cells[city.cellId].center.clone();
+    const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const u = new THREE.Vector3().crossVectors(n, ref).normalize()
+      .applyAxisAngle(n, this.rand() * Math.PI * 2);
+
+    const o = this.baseOrbital('diver', DIVER_HP);
+    o.landCell = city.cellId;
+    o.basisN = n; o.basisU = u;
+    o.theta = -2.4 - delay * 0.4;
+
+    const dart = new THREE.Mesh(
+      new THREE.ConeGeometry(0.011, 0.048, 4),
+      new THREE.MeshBasicMaterial({ color: COL_ROSE, wireframe: true, transparent: true, opacity: 0.95 }));
+    o.group.add(dart);
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.007, 8, 8),
+      new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+    o.group.add(core);
+    o.group.visible = false;
+    this.root.add(o.group);
+
+    // 俯冲航迹：绕行弧线 + 直插城市
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 64; i++) {
+      const th = -2.4 + (i / 64) * 2.4;
+      const r = 1.5 - Math.max(0, (th + 1.0) / 1.0) * 0.3;
+      pts.push(n.clone().multiplyScalar(Math.cos(th)).addScaledVector(u, Math.sin(th)).multiplyScalar(r));
+    }
+    pts.push(n.clone().multiplyScalar(1.02));
+    const trail = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineDashedMaterial({
+        color: COL_ROSE, transparent: true, opacity: 0.35,
+        dashSize: 0.025, gapSize: 0.02, depthWrite: false,
+      }));
+    trail.computeLineDistances();
+    trail.renderOrder = 8;
+    this.root.add(trail);
+    o.trail = trail;
+
+    this.orbitals.push(o);
+  }
+
+  /** 炮舰：飞抵城市上空悬停，持续轰炸，只能被防空火力击落 */
+  private spawnGunship() {
+    const targets = this.cities.filter((c) => c.alive);
+    if (!targets.length) return;
+    const city = targets[Math.floor(this.rand() * targets.length)];
+    const n = this.grid.cells[city.cellId].center.clone();
+    // 悬停点略偏离城市正上方
+    const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const tangent = new THREE.Vector3().crossVectors(n, ref).normalize()
+      .applyAxisAngle(n, this.rand() * Math.PI * 2);
+    const hoverDir = n.clone().addScaledVector(tangent, 0.12).normalize();
+    const startPos = hoverDir.clone().applyAxisAngle(tangent, 1.1).multiplyScalar(1.7);
+
+    const o = this.baseOrbital('gunship', GUNSHIP_HP);
+    o.landCell = city.cellId;
+    o.basisN = startPos;         // 进场起点
+    o.basisU = hoverDir;         // 悬停方向
+    o.descendT = 0;
+    o.dropTimer = 1.2;
+
+    const hull = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.05),
+      new THREE.MeshBasicMaterial({ color: COL_ROSE, wireframe: true, transparent: true, opacity: 0.9 }));
+    hull.scale.set(1.4, 0.5, 1.4);
+    o.group.add(hull);
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.045, 0.005, 8, 24),
+      new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.6 }));
+    ring.rotation.x = Math.PI / 2;
+    o.group.add(ring);
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.014, 8, 8),
+      new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+    o.group.add(core);
+    o.group.position.copy(startPos);
+    this.root.add(o.group);
+    this.orbitals.push(o);
+  }
+
   private updateOrbitals(dt: number) {
     for (const o of this.orbitals) {
       if (!o.alive || o.phase === 'done') continue;
@@ -1007,6 +1104,72 @@ export class Game {
             this.spawnUnit(o.landCell, o.cargo.type);
           }
           if (o.cargo.n === 0) this.finishTransport(o, false);
+        }
+      } else if (o.kind === 'diver') {
+        if (o.phase === 'orbit') {
+          o.theta += dt * 0.95;
+          if (o.theta < -2.35) continue; // 编队错峰出场
+          o.group.visible = true;
+          const r = 1.5 - Math.max(0, (o.theta + 1.0) / 1.0) * 0.3;
+          o.group.position.copy(o.basisN.clone().multiplyScalar(Math.cos(o.theta))
+            .addScaledVector(o.basisU, Math.sin(o.theta)).multiplyScalar(r));
+          o.group.rotation.y += dt * 5;
+          if (o.theta >= 0) { o.phase = 'descend'; o.descendT = 0; }
+        } else if (o.phase === 'descend') {
+          // 高速俯冲
+          o.descendT += dt / 0.9;
+          const k = Math.min(1, o.descendT);
+          o.group.position.copy(o.basisN.clone().multiplyScalar(1.2 - k * k * 0.18));
+          o.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), o.basisN.clone().negate());
+          if (k >= 1) {
+            // 撞击城市
+            o.phase = 'done';
+            o.alive = false;
+            this.hitCity(o.landCell, DIVER_IMPACT_DAMAGE, true);
+            this.spawnFlash(o.group.position.clone(), COL_ROSE, 0.03, 0.35);
+            this.spawnRing(o.group.position.clone(), COL_ROSE, 0.08);
+            this.root.remove(o.group);
+            if (o.trail) this.root.remove(o.trail);
+          }
+        }
+      } else if (o.kind === 'gunship') {
+        if (o.phase === 'orbit') {
+          // 进场：从远轨滑向城市上空悬停点
+          o.descendT += dt / 5;
+          const k = Math.min(1, o.descendT);
+          const ease = 1 - Math.pow(1 - k, 2);
+          const hover = o.basisU.clone().multiplyScalar(GUNSHIP_HOVER);
+          o.group.position.copy(o.basisN.clone().lerp(hover, ease));
+          o.group.rotation.y += dt * 0.8;
+          if (k >= 1) o.phase = 'deploy';
+        } else if (o.phase === 'deploy') {
+          // 悬停轰炸
+          const bobK = 1 + 0.008 * Math.sin(this.time * 2.1);
+          o.group.position.copy(o.basisU.clone().multiplyScalar(GUNSHIP_HOVER * bobK));
+          o.group.rotation.y += dt * 0.8;
+          const targetCity = this.cities.find((c) => c.cellId === o.landCell);
+          if (!targetCity || !targetCity.alive) {
+            // 目标已毁：转移到最近的存活城市上空
+            const next = this.cities.find((c) => c.alive);
+            if (next) {
+              o.landCell = next.cellId;
+              const n2 = this.grid.cells[next.cellId].center.clone();
+              o.basisN = o.group.position.clone();
+              o.basisU = n2;
+              o.phase = 'orbit';
+              o.descendT = 0;
+            }
+          } else {
+            o.dropTimer -= dt;
+            if (o.dropTimer <= 0) {
+              o.dropTimer = GUNSHIP_BOLT_INTERVAL;
+              const cityPos = this.grid.cells[o.landCell].center.clone().multiplyScalar(1.01);
+              this.fireLine(o.group.position.clone(), cityPos, 0.3, COL_ROSE);
+              this.spawnFlash(cityPos, COL_ROSE, 0.014, 0.2);
+              this.hitCity(o.landCell, GUNSHIP_BOLT_DAMAGE, false);
+              sfx.play('arc', 300);
+            }
+          }
         }
       } else {
         // jammer / boss：永续环绕，直到被击落
@@ -1071,7 +1234,11 @@ export class Game {
       o.alive = false;
       this.stats.intercepted++;
       sfx.play('intercept', 120);
-      this.energy += o.kind === 'boss' ? BOSS_REWARD : JAMMER_REWARD;
+      const rewards: Record<OrbitalKind, number> = {
+        transport: TRANSPORT_REWARD, jammer: JAMMER_REWARD, boss: BOSS_REWARD,
+        diver: DIVER_REWARD, gunship: GUNSHIP_REWARD,
+      };
+      this.energy += rewards[o.kind];
       this.spawnRing(o.pos.clone(), COL_CYAN, o.kind === 'boss' ? 0.14 : 0.08);
       this.root.remove(o.group);
       if (o.trail) this.root.remove(o.trail);
@@ -1089,11 +1256,9 @@ export class Game {
     if (type === 'armored') geo = new THREE.OctahedronGeometry(def.size);
     else if (type === 'runner') geo = new THREE.ConeGeometry(def.size * 0.7, def.size * 2.2, 4);
     else if (type === 'splitter') geo = new THREE.IcosahedronGeometry(def.size, 0);
-    else if (type === 'burrower') { geo = new THREE.OctahedronGeometry(def.size); geo.scale(1, 0.55, 1); }
     else geo = new THREE.TetrahedronGeometry(def.size);
     const mat = new THREE.MeshBasicMaterial({
-      color: type === 'armored' ? new THREE.Color('#c22343')
-        : type === 'burrower' ? new THREE.Color('#a33052') : COL_ROSE,
+      color: type === 'armored' ? new THREE.Color('#c22343') : COL_ROSE,
       wireframe: true, transparent: true, opacity: 0.95,
     });
     const mesh = new THREE.Mesh(geo, mat);
@@ -1102,7 +1267,7 @@ export class Game {
     this.root.add(mesh);
     this.units.push({
       type, def, mesh, path, seg: 0, t: 0, hp: def.hp, alive: true, pos: pos.clone(),
-      slowUntilFrame: false, burrowT: 0, burrowed: false,
+      slowUntilFrame: false,
     });
   }
 
@@ -1138,19 +1303,7 @@ export class Game {
           else { this.killUnit(u, false); continue; }
         }
       }
-      // 掘地者：地表/遁地循环，遁地期间免疫攻击
-      if (u.type === 'burrower') {
-        u.burrowT += dt;
-        const cycle = u.burrowT % (BURROW_SURFACE + BURROW_UNDER);
-        const wasBurrowed = u.burrowed;
-        u.burrowed = cycle > BURROW_SURFACE;
-        if (u.burrowed !== wasBurrowed) {
-          this.spawnRing(u.pos.clone(), COL_ROSE, 0.03);
-        }
-        (u.mesh.material as THREE.MeshBasicMaterial).opacity = u.burrowed ? 0.18 : 0.95;
-      }
-      const lift = u.burrowed ? 1.004 : 1.02;
-      u.pos.copy(from).lerp(to, u.t).normalize().multiplyScalar(lift);
+      u.pos.copy(from).lerp(to, u.t).normalize().multiplyScalar(1.02);
       u.mesh.position.copy(u.pos);
       u.mesh.rotation.x += dt * 3.1;
       u.mesh.rotation.y += dt * 2.3;
@@ -1176,12 +1329,12 @@ export class Game {
     }
   }
 
-  private hitCity(cellId: number) {
+  private hitCity(cellId: number, dmg = CITY_HIT_DAMAGE, countLeak = true) {
     const city = this.cities.find((c) => c.cellId === cellId);
     if (!city || !city.alive) return;
-    this.stats.leaked++;
+    if (countLeak) this.stats.leaked++;
     sfx.play('cityhit', 200);
-    city.hp -= CITY_HIT_DAMAGE;
+    city.hp -= dmg;
     city.row.classList.add('hurt');
     setTimeout(() => city.row.classList.remove('hurt'), 600);
     const flash = document.getElementById('dmg-flash')!;
@@ -1268,7 +1421,7 @@ export class Game {
           const orbPos = towerN.clone().multiplyScalar(towerH + 0.072);
           let arcs = 0;
           for (const u of this.units) {
-            if (!u.alive || u.burrowed || arcs >= 2) continue;
+            if (!u.alive || arcs >= 2) continue;
             if (towerN.angleTo(u.pos) > this.towerRange(tw)) continue;
             this.spawnArc(orbPos, u.pos.clone());
             arcs++;
@@ -1302,11 +1455,11 @@ export class Game {
         continue;
       }
 
-      // pulse / prism：对地（遁地中的掘地者无法锁定）
+      // pulse / prism：对地
       let target: Unit | null = null;
       let bestProgress = -1;
       for (const u of this.units) {
-        if (!u.alive || u.burrowed) continue;
+        if (!u.alive) continue;
         if (towerN.angleTo(u.pos) > range) continue;
         const progress = u.seg + u.t;
         if (progress > bestProgress) { bestProgress = progress; target = u; }
@@ -1382,9 +1535,11 @@ export class Game {
     if (tw.beam) { this.root.remove(tw.beam); tw.beam.geometry.dispose(); tw.beam = null; }
   }
 
-  private fireLine(from: THREE.Vector3, to: THREE.Vector3, ttl: number) {
+  private fireLine(from: THREE.Vector3, to: THREE.Vector3, ttl: number, color?: THREE.Color) {
+    const mat = this.laserMat.clone();
+    if (color) mat.color.copy(color);
     const line = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([from, to]), this.laserMat.clone());
+      new THREE.BufferGeometry().setFromPoints([from, to]), mat);
     line.renderOrder = 9;
     this.root.add(line);
     this.fx.push({ obj: line, ttl, max: ttl, kind: 'laser' });

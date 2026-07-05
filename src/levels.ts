@@ -6,8 +6,10 @@
 
 export interface WaveCfg {
   prewave: number;  // 距上一波发起的秒数（首波 = 开局布防时间）
-  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter' | 'burrower'; n: number }[];
+  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter'; n: number }[];
   jammers?: number;
+  divers?: number;    // 俯冲艇：不登陆，直接俯冲撞击城市
+  gunships?: number;  // 炮舰：悬停在城市上空持续轰炸，只能防空打
   boss?: boolean;
 }
 
@@ -69,8 +71,8 @@ export const LEVELS: LevelCfg[] = [
     waves: [
       { prewave: 18, drops: [{ type: 'swarm', n: 5 }] },
       { prewave: 24, drops: [{ type: 'swarm', n: 6 }, { type: 'runner', n: 4 }] },
-      { prewave: 24, drops: [{ type: 'armored', n: 2 }, { type: 'swarm', n: 5 }] },
-      { prewave: 26, drops: [{ type: 'armored', n: 3 }, { type: 'runner', n: 5 }, { type: 'swarm', n: 6 }] },
+      { prewave: 24, drops: [{ type: 'armored', n: 2 }, { type: 'swarm', n: 5 }], divers: 1 },
+      { prewave: 26, drops: [{ type: 'armored', n: 3 }, { type: 'runner', n: 5 }, { type: 'swarm', n: 6 }], divers: 2 },
     ],
   },
   {
@@ -88,15 +90,15 @@ export const LEVELS: LevelCfg[] = [
   },
   {
     id: 5, name: '中枢', sub: 'THE CORE',
-    flavor: '中央都会是文明的心脏——它陷落即战败。重装集群正在逼近。', objective: '首都绝不能陷落 · 重装冲击',
-    seed: 14142135, cities: 4, cityLayout: 'capital', cityCluster: 0.9,
-    landingSpread: 1.8, lanes: 3, startEnergy: 340, towers: T5,
+    flavor: '整个星球只剩最后一座都会。敌军从四面八方合围。', objective: '孤城死守 · 敌军四面合围',
+    seed: 14142135, cities: 1, cityLayout: 'capital', cityCluster: 0.9,
+    landingSpread: 1.1, lanes: 4, startEnergy: 340, towers: T5,
     waves: [
       { prewave: 18, drops: [{ type: 'armored', n: 3 }] },
-      { prewave: 26, drops: [{ type: 'armored', n: 3 }, { type: 'swarm', n: 6 }] },
-      { prewave: 26, drops: [{ type: 'armored', n: 4 }, { type: 'runner', n: 5 }], jammers: 1 },
-      { prewave: 28, drops: [{ type: 'armored', n: 4 }, { type: 'armored', n: 3 }, { type: 'swarm', n: 7 }] },
-      { prewave: 28, drops: [{ type: 'armored', n: 5 }, { type: 'runner', n: 6 }, { type: 'swarm', n: 8 }] },
+      { prewave: 26, drops: [{ type: 'armored', n: 3 }, { type: 'swarm', n: 6 }], divers: 1 },
+      { prewave: 26, drops: [{ type: 'armored', n: 4 }, { type: 'runner', n: 5 }], gunships: 1 },
+      { prewave: 28, drops: [{ type: 'armored', n: 4 }, { type: 'armored', n: 3 }, { type: 'swarm', n: 7 }], divers: 2 },
+      { prewave: 28, drops: [{ type: 'armored', n: 5 }, { type: 'runner', n: 6 }, { type: 'swarm', n: 8 }], gunships: 1, divers: 2 },
     ],
   },
   {
@@ -109,22 +111,22 @@ export const LEVELS: LevelCfg[] = [
       { prewave: 22, drops: [{ type: 'splitter', n: 3 }, { type: 'swarm', n: 4 }] },
       { prewave: 22, drops: [{ type: 'runner', n: 4 }, { type: 'splitter', n: 3 }, { type: 'swarm', n: 4 }] },
       { prewave: 24, drops: [{ type: 'splitter', n: 4 }, { type: 'armored', n: 3 }, { type: 'swarm', n: 5 }], jammers: 1 },
-      { prewave: 24, drops: [{ type: 'splitter', n: 3 }, { type: 'runner', n: 5 }, { type: 'swarm', n: 5 }, { type: 'swarm', n: 4 }] },
-      { prewave: 26, drops: [{ type: 'splitter', n: 5 }, { type: 'armored', n: 4 }, { type: 'swarm', n: 6 }, { type: 'runner', n: 4 }] },
+      { prewave: 24, drops: [{ type: 'splitter', n: 3 }, { type: 'runner', n: 5 }, { type: 'swarm', n: 5 }, { type: 'swarm', n: 4 }], divers: 2 },
+      { prewave: 26, drops: [{ type: 'splitter', n: 5 }, { type: 'armored', n: 4 }, { type: 'swarm', n: 6 }, { type: 'runner', n: 4 }], divers: 2 },
     ],
   },
   {
     id: 7, name: '寂静轨道', sub: 'DEAD ORBIT',
-    flavor: '敌方干扰网全面展开，掘地者会潜入地下规避炮火。防御卫星已解锁。', objective: '夺回天空 · 卫星火力网',
+    flavor: '敌军空中力量全面展开：炮舰压顶、俯冲艇突袭。防御卫星已解锁。', objective: '夺回天空 · 立体防御',
     seed: 22360679, cities: 5, cityLayout: 'global', cityCluster: 0.2,
     landingSpread: 3.0, lanes: 3, startEnergy: 380, towers: T7,
     waves: [
-      { prewave: 18, drops: [{ type: 'swarm', n: 6 }], jammers: 1 },
-      { prewave: 24, drops: [{ type: 'burrower', n: 3 }, { type: 'runner', n: 5 }], jammers: 1 },
-      { prewave: 24, drops: [{ type: 'swarm', n: 8 }, { type: 'burrower', n: 3 }], jammers: 2 },
-      { prewave: 26, drops: [{ type: 'armored', n: 5 }, { type: 'burrower', n: 4 }] },
-      { prewave: 26, drops: [{ type: 'burrower', n: 4 }, { type: 'swarm', n: 8 }, { type: 'runner', n: 6 }], jammers: 2 },
-      { prewave: 28, drops: [{ type: 'armored', n: 6 }, { type: 'burrower', n: 4 }, { type: 'swarm', n: 8 }] },
+      { prewave: 18, drops: [{ type: 'swarm', n: 6 }], jammers: 1, divers: 1 },
+      { prewave: 24, drops: [{ type: 'runner', n: 5 }], jammers: 1, divers: 2 },
+      { prewave: 24, drops: [{ type: 'swarm', n: 8 }], jammers: 2, gunships: 1 },
+      { prewave: 26, drops: [{ type: 'armored', n: 5 }], divers: 3, gunships: 1 },
+      { prewave: 26, drops: [{ type: 'swarm', n: 8 }, { type: 'runner', n: 6 }], jammers: 2, divers: 2, gunships: 1 },
+      { prewave: 28, drops: [{ type: 'armored', n: 6 }, { type: 'swarm', n: 8 }], divers: 3, gunships: 2 },
     ],
   },
   {
@@ -134,12 +136,12 @@ export const LEVELS: LevelCfg[] = [
     landingSpread: Math.PI, lanes: 5, startEnergy: 400, towers: T7,
     waves: [
       { prewave: 18, drops: [{ type: 'swarm', n: 7 }, { type: 'runner', n: 4 }] },
-      { prewave: 24, drops: [{ type: 'armored', n: 4 }, { type: 'splitter', n: 3 }], jammers: 1 },
-      { prewave: 24, drops: [{ type: 'runner', n: 6 }, { type: 'burrower', n: 3 }, { type: 'swarm', n: 7 }] },
+      { prewave: 24, drops: [{ type: 'armored', n: 4 }, { type: 'splitter', n: 3 }], jammers: 1, divers: 1 },
+      { prewave: 24, drops: [{ type: 'runner', n: 6 }, { type: 'swarm', n: 7 }], divers: 2, gunships: 1 },
       { prewave: 26, drops: [{ type: 'armored', n: 5 }, { type: 'splitter', n: 4 }], jammers: 2 },
-      { prewave: 26, drops: [{ type: 'burrower', n: 4 }, { type: 'runner', n: 6 }, { type: 'swarm', n: 8 }] },
-      { prewave: 28, drops: [{ type: 'armored', n: 6 }, { type: 'splitter', n: 4 }, { type: 'swarm', n: 8 }], jammers: 1 },
-      { prewave: 30, drops: [{ type: 'armored', n: 5 }, { type: 'burrower', n: 4 }, { type: 'swarm', n: 8 }], boss: true },
+      { prewave: 26, drops: [{ type: 'runner', n: 6 }, { type: 'swarm', n: 8 }], divers: 3, gunships: 1 },
+      { prewave: 28, drops: [{ type: 'armored', n: 6 }, { type: 'splitter', n: 4 }, { type: 'swarm', n: 8 }], jammers: 1, gunships: 1 },
+      { prewave: 30, drops: [{ type: 'armored', n: 5 }, { type: 'swarm', n: 8 }], divers: 3, boss: true },
     ],
   },
 ];
