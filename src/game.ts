@@ -91,7 +91,7 @@ export interface Tower {
   group: THREE.Group; ring: THREE.Mesh | null; edges: THREE.LineSegments[];
   cooldown: number;
   // 轨道激光的锁定状态
-  lockTarget: Orbital | null; lockT: number; beam: THREE.Line | null;
+  lockTarget: Orbital | null; lockT: number; beam: THREE.Mesh | null;
   jammed: boolean;
 }
 
@@ -114,7 +114,13 @@ interface Orbital {
   orbitAxis: THREE.Vector3; orbitAngle: number; dropTimer: number;
 }
 
-interface Fx { obj: THREE.Object3D; ttl: number; max: number; kind: 'laser' | 'ring' }
+interface Fx { obj: THREE.Object3D; ttl: number; max: number; kind: 'laser' | 'ring' | 'flash' | 'beam' | 'arc' }
+
+interface Projectile {
+  mesh: THREE.Group; trail: THREE.Line;
+  from: THREE.Vector3; to: THREE.Vector3; t: number;
+  dmg: number; aoe: number;
+}
 
 // ========== 主类 ==========
 
@@ -130,6 +136,7 @@ export class Game {
   units: Unit[] = [];
   orbitals: Orbital[] = [];
   private fx: Fx[] = [];
+  private projectiles: Projectile[] = [];
   private occupied = new Set<number>();
   private root = new THREE.Group();
   private markers: THREE.Group[] = [];
@@ -334,63 +341,148 @@ export class Game {
 
     const fill = new THREE.MeshBasicMaterial({ color: new THREE.Color('#0d3644') });
     const edgeM = new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.9 });
+    const amberM = new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.9 });
+    const glowM = new THREE.MeshBasicMaterial({
+      color: COL_CYAN, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false });
     const edges: THREE.LineSegments[] = [];
-    const addPart = (geo: THREE.BufferGeometry, y: number, ry = 0) => {
+    // 待机动画注册表
+    const spin: { obj: THREE.Object3D; axis: 'x' | 'y' | 'z'; speed: number }[] = [];
+    const bob: { obj: THREE.Object3D; base: number; amp: number; freq: number }[] = [];
+
+    const addPart = (geo: THREE.BufferGeometry, y: number, parent: THREE.Object3D = group, ry = 0) => {
       const mesh = new THREE.Mesh(geo, fill);
       mesh.position.y = y; mesh.rotation.y = ry;
-      group.add(mesh);
+      parent.add(mesh);
       const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeM);
       e.position.y = y; e.rotation.y = ry;
-      group.add(e);
+      parent.add(e);
       edges.push(e);
       return mesh;
     };
-
-    let ring: THREE.Mesh | null = null;
-    const mkRing = (r: number, y: number) => {
-      const m = new THREE.Mesh(
-        new THREE.TorusGeometry(r, 0.0022, 8, 24),
+    const mkRing = (r: number, y: number, tube = 0.0022) => {
+      const m = new THREE.Mesh(new THREE.TorusGeometry(r, tube, 8, 24),
         new THREE.MeshBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.8 }));
       m.position.y = y; m.rotation.x = Math.PI / 2;
       group.add(m);
       return m;
     };
 
+    let ring: THREE.Mesh | null = null;
+
     switch (def.key) {
-      case 'pulse':
-        addPart(new THREE.ConeGeometry(0.02, 0.055, 6), 0.03);
-        ring = mkRing(0.017, 0.068);
+      case 'pulse': {
+        // 六棱炮塔 + 悬浮准星环 + 炮口聚能珠
+        addPart(new THREE.ConeGeometry(0.02, 0.05, 6), 0.028);
+        ring = mkRing(0.016, 0.062);
+        const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.006, 8, 8), glowM.clone());
+        muzzle.position.y = 0.062;
+        group.add(muzzle);
+        group.userData.muzzle = muzzle;
+        bob.push({ obj: ring, base: 0.062, amp: 0.004, freq: 2.2 });
         break;
-      case 'tesla':
-        addPart(new THREE.CylinderGeometry(0.008, 0.014, 0.05, 6), 0.025);
-        ring = mkRing(0.02, 0.055);
-        mkRing(0.014, 0.04);
+      }
+      case 'tesla': {
+        // 特斯拉线圈：柱体 + 三层错向旋转环 + 顶端电浆球
+        addPart(new THREE.CylinderGeometry(0.007, 0.013, 0.055, 6), 0.028);
+        const r1 = mkRing(0.019, 0.024, 0.0026);
+        const r2 = mkRing(0.016, 0.038, 0.0026);
+        const r3 = mkRing(0.013, 0.052, 0.0026);
+        spin.push({ obj: r1, axis: 'z', speed: 1.4 }, { obj: r2, axis: 'z', speed: -2.0 }, { obj: r3, axis: 'z', speed: 2.8 });
+        const orb = new THREE.Mesh(new THREE.SphereGeometry(0.009, 10, 10), glowM.clone());
+        orb.position.y = 0.072;
+        group.add(orb);
+        group.userData.muzzle = orb;
+        bob.push({ obj: orb, base: 0.072, amp: 0.005, freq: 3.1 });
         break;
-      case 'laser':
-        addPart(new THREE.CylinderGeometry(0.005, 0.011, 0.08, 6), 0.04);
-        addPart(new THREE.OctahedronGeometry(0.012), 0.09);
-        ring = mkRing(0.013, 0.02);
+      }
+      case 'laser': {
+        // 对空炮台：宽基座 + 长炮管 + 三片散热鳍 + 高速自旋晶体
+        addPart(new THREE.CylinderGeometry(0.016, 0.02, 0.018, 6), 0.009);
+        addPart(new THREE.CylinderGeometry(0.0045, 0.009, 0.085, 6), 0.055);
+        for (let i = 0; i < 3; i++) {
+          const fin = new THREE.Mesh(new THREE.BoxGeometry(0.003, 0.03, 0.012), fill);
+          fin.position.y = 0.03;
+          fin.rotation.y = (i / 3) * Math.PI * 2;
+          fin.translateZ(0.013);
+          group.add(fin);
+          const fe = new THREE.LineSegments(new THREE.EdgesGeometry(fin.geometry), edgeM);
+          fe.position.copy(fin.position); fe.rotation.copy(fin.rotation);
+          group.add(fe); edges.push(fe);
+        }
+        const crystal = addPart(new THREE.OctahedronGeometry(0.011), 0.108);
+        spin.push({ obj: crystal, axis: 'y', speed: 4.5 });
+        group.userData.muzzle = crystal;
         break;
-      case 'missile':
-        addPart(new THREE.BoxGeometry(0.03, 0.02, 0.03), 0.012);
-        addPart(new THREE.CylinderGeometry(0.005, 0.005, 0.035, 6), 0.04, 0.3);
-        addPart(new THREE.CylinderGeometry(0.005, 0.005, 0.035, 6), 0.035, -0.4);
+      }
+      case 'missile': {
+        // 导弹阵地：装甲基座 + 可旋转四联发射架（弹头琥珀色）
+        addPart(new THREE.BoxGeometry(0.032, 0.014, 0.032), 0.008);
+        const rack = new THREE.Group();
+        rack.position.y = 0.03;
+        for (let i = 0; i < 4; i++) {
+          const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+          const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.0045, 0.034, 6), fill);
+          tube.position.set(Math.cos(a) * 0.011, 0, Math.sin(a) * 0.011);
+          tube.rotation.x = -0.18;
+          rack.add(tube);
+          const te = new THREE.LineSegments(new THREE.EdgesGeometry(tube.geometry), edgeM);
+          te.position.copy(tube.position); te.rotation.copy(tube.rotation);
+          rack.add(te); edges.push(te);
+          const tip = new THREE.Mesh(new THREE.ConeGeometry(0.0045, 0.009, 6), amberM);
+          tip.position.set(tube.position.x, 0.021, tube.position.z);
+          tip.rotation.x = -0.18;
+          rack.add(tip);
+        }
+        group.add(rack);
+        spin.push({ obj: rack, axis: 'y', speed: 0.5 });
+        group.userData.rack = rack;
         break;
-      case 'radar':
-        addPart(new THREE.CylinderGeometry(0.004, 0.008, 0.045, 6), 0.022);
-        ring = mkRing(0.02, 0.055);
-        addPart(new THREE.ConeGeometry(0.018, 0.01, 16, 1, true), 0.055);
+      }
+      case 'radar': {
+        // 雷达站：支柱 + 持续旋转的碟形天线 + 琥珀馈源
+        addPart(new THREE.CylinderGeometry(0.0035, 0.008, 0.04, 6), 0.02);
+        const dishGroup = new THREE.Group();
+        dishGroup.position.y = 0.048;
+        const dish = new THREE.Mesh(new THREE.SphereGeometry(0.02, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.35), fill);
+        dish.rotation.x = Math.PI * 0.62;
+        dishGroup.add(dish);
+        const de = new THREE.LineSegments(new THREE.EdgesGeometry(dish.geometry), edgeM);
+        de.rotation.copy(dish.rotation);
+        dishGroup.add(de); edges.push(de);
+        const feed = new THREE.Mesh(new THREE.SphereGeometry(0.004, 8, 8), amberM);
+        feed.position.set(0, 0.004, 0.012);
+        dishGroup.add(feed);
+        group.add(dishGroup);
+        spin.push({ obj: dishGroup, axis: 'y', speed: 1.1 });
+        ring = mkRing(0.018, 0.006);
         break;
+      }
       case 'prism': {
-        const geo = new THREE.OctahedronGeometry(0.02);
-        geo.scale(1, 2.2, 1);
-        addPart(geo, 0.05);
-        ring = mkRing(0.016, 0.012);
+        // 汇聚棱镜：反重力悬浮晶体 + 两颗环绕碎晶 + 地面聚能环
+        const geo = new THREE.OctahedronGeometry(0.018);
+        geo.scale(1, 2.3, 1);
+        const crystal = addPart(geo, 0.055);
+        spin.push({ obj: crystal, axis: 'y', speed: 1.2 });
+        bob.push({ obj: crystal, base: 0.055, amp: 0.007, freq: 1.6 });
+        const shards = new THREE.Group();
+        shards.position.y = 0.05;
+        for (let i = 0; i < 2; i++) {
+          const shard = new THREE.Mesh(new THREE.OctahedronGeometry(0.005),
+            new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.9 }));
+          shard.position.set(Math.cos(i * Math.PI) * 0.024, 0, Math.sin(i * Math.PI) * 0.024);
+          shards.add(shard);
+        }
+        group.add(shards);
+        spin.push({ obj: shards, axis: 'y', speed: -2.4 });
+        ring = mkRing(0.02, 0.004, 0.0028);
+        group.userData.muzzle = crystal;
         break;
       }
     }
     group.userData.ring = ring;
     group.userData.edges = edges;
+    group.userData.spin = spin;
+    group.userData.bob = bob;
     return group;
   }
 
@@ -412,6 +504,7 @@ export class Game {
     this.updateOrbitals(dt);
     this.updateUnits(dt);
     this.updateTowers(dt);
+    this.updateProjectiles(dt);
     this.updateFx(dt);
     this.animateIdle(dt);
     this.updateHud();
@@ -805,8 +898,17 @@ export class Game {
     for (const tw of this.towers) {
       if (tw.group.scale.x < 1) tw.group.scale.setScalar(Math.min(1, tw.group.scale.x + dt * 4));
       if (tw.ring) tw.ring.rotation.z += dt * 1.6;
+      // 待机动画：自旋部件 + 悬浮呼吸
+      const ud = tw.group.userData;
+      for (const s of (ud.spin ?? []) as { obj: THREE.Object3D; axis: 'x' | 'y' | 'z'; speed: number }[]) {
+        s.obj.rotation[s.axis] += s.speed * dt;
+      }
+      for (const b of (ud.bob ?? []) as { obj: THREE.Object3D; base: number; amp: number; freq: number }[]) {
+        b.obj.position.y = b.base + Math.sin(this.time * b.freq + tw.cellId) * b.amp;
+      }
 
       const towerN = this.grid.cells[tw.cellId].center;
+      const towerH = tw.group.position.length(); // 山地塔基座更高
 
       // 被干扰？（防空塔与雷达不受干扰，地面塔被压制）
       tw.jammed = false;
@@ -837,13 +939,30 @@ export class Game {
         this.updateLaserTower(tw, towerN, range, rateMul, dt);
         continue;
       }
-      if (tw.def.key === 'tesla' || tw.def.key === 'radar') continue; // 光环塔不攻击
+      if (tw.def.key === 'tesla') {
+        // 减速场电弧演出：周期性劈向场内敌人
+        tw.cooldown -= dt;
+        if (tw.cooldown <= 0) {
+          const orbPos = towerN.clone().multiplyScalar(towerH + 0.072);
+          let arcs = 0;
+          for (const u of this.units) {
+            if (!u.alive || arcs >= 2) continue;
+            if (towerN.angleTo(u.pos) > this.towerRange(tw)) continue;
+            this.spawnArc(orbPos, u.pos.clone());
+            arcs++;
+          }
+          if (arcs > 0) this.spawnFlash(orbPos, COL_CYAN, 0.008, 0.14);
+          tw.cooldown = 0.38;
+        }
+        continue;
+      }
+      if (tw.def.key === 'radar') continue; // 增益塔不攻击
 
       tw.cooldown -= dt * rateMul;
       if (tw.cooldown > 0) continue;
 
       if (tw.def.key === 'missile') {
-        // 对空爆发：优先运输舰
+        // 对空爆发：优先运输舰，发射抛物线弹道
         let target: Orbital | null = null;
         for (const o of this.orbitals) {
           if (!o.alive || o.phase === 'done' || !o.group.visible) continue;
@@ -853,15 +972,9 @@ export class Game {
         }
         if (!target) continue;
         tw.cooldown = tw.def.cooldown;
-        const dmg = this.towerDamage(tw);
-        // 弹幕视觉：粗线 + 爆发环
-        this.fireLine(towerN.clone().multiplyScalar(1.07), target.pos.clone(), 0.3);
-        this.spawnRing(target.pos.clone(), COL_CYAN, 0.05);
-        // 范围溅射：邻近轨道目标
-        for (const o of this.orbitals) {
-          if (!o.alive || o.phase === 'done' || !o.group.visible) continue;
-          if (o.pos.distanceTo(target.pos) < 0.28) this.damageOrbital(o, dmg);
-        }
+        const from = towerN.clone().multiplyScalar(towerH + 0.04);
+        this.spawnFlash(from, COL_AMBER, 0.01, 0.15);
+        this.launchMissile(from, target.pos.clone(), this.towerDamage(tw));
         continue;
       }
 
@@ -878,7 +991,19 @@ export class Game {
       tw.cooldown = tw.def.cooldown;
       const dmg = Math.max(1, this.towerDamage(tw) - target.def.armor);
       target.hp -= dmg;
-      this.fireLine(towerN.clone().multiplyScalar(1.06), target.pos.clone(), 0.16);
+      if (tw.def.key === 'prism') {
+        // 汇聚棱镜：粗光束 + 双端爆闪
+        const from = towerN.clone().multiplyScalar(towerH + 0.055);
+        this.spawnBeam(from, target.pos.clone(), 0.006, COL_CYAN);
+        this.spawnFlash(from, COL_AMBER, 0.012, 0.2);
+        this.spawnFlash(target.pos.clone(), COL_CYAN, 0.016, 0.25);
+      } else {
+        // 脉冲炮：射线 + 枪口焰 + 命中闪
+        const from = towerN.clone().multiplyScalar(towerH + 0.062);
+        this.fireLine(from, target.pos.clone(), 0.14);
+        this.spawnFlash(from, COL_CYAN, 0.007, 0.12);
+        this.spawnFlash(target.pos.clone(), COL_ROSE, 0.01, 0.15);
+      }
       if (target.hp <= 0) this.killUnit(target, true);
     }
   }
@@ -902,16 +1027,27 @@ export class Game {
     const ramp = 1 + (tw.lockT / 3) * 1.5; // 1 → 2.5
     this.damageOrbital(target, this.towerDamage(tw) * ramp * rateMul * dt);
 
-    // 持续光束
+    // 持续体积光柱：锁定越久越粗越亮
     if (!tw.beam) {
-      tw.beam = new THREE.Line(new THREE.BufferGeometry(), this.laserMat.clone());
+      tw.beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(1, 1, 1, 6, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: COL_CYAN, transparent: true, opacity: 0.6,
+          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+        }));
       tw.beam.renderOrder = 9;
       this.root.add(tw.beam);
     }
-    tw.beam.geometry.dispose();
-    tw.beam.geometry = new THREE.BufferGeometry().setFromPoints([
-      towerN.clone().multiplyScalar(1.09), target.pos.clone()]);
-    (tw.beam.material as THREE.LineBasicMaterial).opacity = 0.5 + (tw.lockT / 3) * 0.5;
+    const from = towerN.clone().multiplyScalar(tw.group.position.length() + 0.108);
+    const dir = target.pos.clone().sub(from);
+    const len = dir.length();
+    const radius = 0.0022 + (tw.lockT / 3) * 0.0045;
+    tw.beam.position.copy(from).addScaledVector(dir, 0.5);
+    tw.beam.scale.set(radius, len, radius);
+    tw.beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    (tw.beam.material as THREE.MeshBasicMaterial).opacity = 0.45 + (tw.lockT / 3) * 0.5;
+    // 命中点火花
+    if (this.rand() < dt * 8) this.spawnFlash(target.pos.clone(), COL_CYAN, 0.008 + (tw.lockT / 3) * 0.008, 0.12);
   }
 
   private clearLock(tw: Tower) {
@@ -926,6 +1062,108 @@ export class Game {
     line.renderOrder = 9;
     this.root.add(line);
     this.fx.push({ obj: line, ttl, max: ttl, kind: 'laser' });
+  }
+
+  /** 短促的发光球闪光（枪口焰 / 命中爆闪） */
+  private spawnFlash(pos: THREE.Vector3, color: THREE.Color, size: number, ttl = 0.18) {
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(size, 8, 8),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false }));
+    m.position.copy(pos);
+    m.renderOrder = 9;
+    this.root.add(m);
+    this.fx.push({ obj: m, ttl, max: ttl, kind: 'flash' });
+  }
+
+  /** 一次性粗光束（棱镜），圆柱体 + 加色混合，随 ttl 变细淡出 */
+  private spawnBeam(from: THREE.Vector3, to: THREE.Vector3, radius: number, color: THREE.Color, ttl = 0.28) {
+    const dir = to.clone().sub(from);
+    const len = dir.length();
+    const m = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, len, 6, 1, true),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    m.position.copy(from).addScaledVector(dir, 0.5);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    m.renderOrder = 9;
+    this.root.add(m);
+    this.fx.push({ obj: m, ttl, max: ttl, kind: 'beam' });
+  }
+
+  /** 锯齿状电弧（磁暴塔） */
+  private spawnArc(from: THREE.Vector3, to: THREE.Vector3, ttl = 0.16) {
+    const pts: THREE.Vector3[] = [];
+    const segs = 6;
+    const dir = to.clone().sub(from);
+    for (let i = 0; i <= segs; i++) {
+      const p = from.clone().addScaledVector(dir, i / segs);
+      if (i > 0 && i < segs) {
+        p.add(new THREE.Vector3(
+          (this.rand() - 0.5) * 0.02, (this.rand() - 0.5) * 0.02, (this.rand() - 0.5) * 0.02));
+      }
+      pts.push(p);
+    }
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts), this.laserMat.clone());
+    line.renderOrder = 9;
+    this.root.add(line);
+    this.fx.push({ obj: line, ttl, max: ttl, kind: 'arc' });
+  }
+
+  /** 导弹弹道：抛物线飞行，落点结算范围伤害 */
+  private launchMissile(from: THREE.Vector3, to: THREE.Vector3, dmg: number) {
+    const mesh = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.ConeGeometry(0.004, 0.016, 6),
+      new THREE.MeshBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.95 }));
+    mesh.add(body);
+    const flame = new THREE.Mesh(
+      new THREE.SphereGeometry(0.004, 6, 6),
+      new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    flame.position.y = -0.01;
+    mesh.add(flame);
+    mesh.position.copy(from);
+    this.root.add(mesh);
+
+    const trail = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([from, from]),
+      new THREE.LineBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false }));
+    trail.renderOrder = 8;
+    this.root.add(trail);
+
+    this.projectiles.push({ mesh, trail, from: from.clone(), to: to.clone(), t: 0, dmg, aoe: 0.28 });
+  }
+
+  private updateProjectiles(dt: number) {
+    for (const p of this.projectiles) {
+      p.t = Math.min(1, p.t + dt * 2.2);
+      // 抛物线：中点向外拱起
+      const mid = p.from.clone().add(p.to).multiplyScalar(0.5).normalize()
+        .multiplyScalar(Math.max(p.from.length(), p.to.length()) + 0.12);
+      const a = p.from.clone().lerp(mid, p.t);
+      const b = mid.clone().lerp(p.to, p.t);
+      const pos = a.lerp(b, p.t);
+      const prev = p.mesh.position.clone();
+      p.mesh.position.copy(pos);
+      const vel = pos.clone().sub(prev);
+      if (vel.lengthSq() > 1e-10) {
+        p.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), vel.normalize());
+      }
+      p.trail.geometry.dispose();
+      p.trail.geometry = new THREE.BufferGeometry().setFromPoints([p.from, pos]);
+
+      if (p.t >= 1) {
+        // 命中：爆闪 + 冲击环 + 范围伤害
+        this.spawnFlash(p.to, COL_CYAN, 0.02, 0.3);
+        this.spawnRing(p.to.clone(), COL_CYAN, 0.06);
+        for (const o of this.orbitals) {
+          if (!o.alive || o.phase === 'done' || !o.group.visible) continue;
+          if (o.pos.distanceTo(p.to) < p.aoe) this.damageOrbital(o, p.dmg);
+        }
+        this.root.remove(p.mesh);
+        this.root.remove(p.trail);
+      }
+    }
+    this.projectiles = this.projectiles.filter((p) => p.t < 1);
   }
 
   // ============ 特效 ============
@@ -946,11 +1184,25 @@ export class Game {
     for (const f of this.fx) {
       f.ttl -= dt;
       const k = Math.max(0, f.ttl / f.max);
-      if (f.kind === 'laser') {
-        ((f.obj as THREE.Line).material as THREE.LineBasicMaterial).opacity = k;
-      } else {
-        f.obj.scale.setScalar(1 + (1 - k) * 2.2);
-        ((f.obj as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = k * 0.9;
+      const mat = (f.obj as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      switch (f.kind) {
+        case 'laser':
+        case 'arc':
+          mat.opacity = k;
+          break;
+        case 'flash':
+          f.obj.scale.setScalar(1 + (1 - k) * 1.6);
+          mat.opacity = k * 0.95;
+          break;
+        case 'beam':
+          f.obj.scale.x = Math.max(0.05, k);
+          f.obj.scale.z = Math.max(0.05, k);
+          mat.opacity = k * 0.9;
+          break;
+        case 'ring':
+          f.obj.scale.setScalar(1 + (1 - k) * 2.2);
+          mat.opacity = k * 0.9;
+          break;
       }
       if (f.ttl <= 0) this.root.remove(f.obj);
     }
