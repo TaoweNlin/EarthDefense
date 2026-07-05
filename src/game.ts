@@ -215,21 +215,22 @@ export class Game {
    *  无尽的后期原则：数量不设上限、空中压力优先膨胀，用巨量敌群压制成型的防线。 */
   private waveAt(i: number): WaveCfg {
     if (!this.cfg.endless) return this.cfg.waves[i];
+    // 前 3~4 波是热身，之后陡增；后期数量不设上限
     const types = ['swarm', 'runner', 'armored', 'splitter'] as const;
     const drops: WaveCfg['drops'] = [];
-    const nDrops = Math.min(2 + Math.floor(i / 2), 6);
+    const nDrops = Math.min(1 + Math.floor(i / 2), 6);   // 波0 单舱起步
     for (let d = 0; d < nDrops; d++) {
       const type = types[(i + d * 2) % types.length];
-      const base = 7 + i * 1.6;
+      const base = 5 + i * 1.5;
       drops.push({ type, n: Math.round(type === 'armored' ? base * 0.5 : base) });
     }
     return {
-      prewave: i === 0 ? 18 : Math.max(13, 24 - i * 0.5),
+      prewave: i === 0 ? 20 : Math.max(13, 24 - i * 0.5),
       drops,
-      jammers: i >= 2 ? Math.min(4, Math.floor((i + 2) / 4)) : 0,
-      divers: i >= 3 ? 1 + Math.floor(i / 2) : 0,        // 无上限：波20 = 11 艘
-      gunships: i >= 5 ? Math.floor(i / 3) : 0,          // 无上限：波20 = 6 艘
-      wings: i >= 2 ? Math.round(6 + i * 2.2) : 0,       // 无上限：波20 = 50 只
+      jammers: i >= 4 ? Math.min(4, Math.floor(i / 4)) : 0,
+      divers: i >= 4 ? Math.floor((i - 2) / 2) : 0,       // 波20 = 9 艘
+      gunships: i >= 6 ? Math.floor((i - 3) / 3) : 0,     // 波20 = 5 艘
+      wings: i >= 3 ? Math.round(4 + (i - 2) * 2.2) : 0,  // 波3 = 6 只，波20 = 44 只
       boss: i > 0 && i % 8 === 7, // 每 8 波一艘母舰
     };
   }
@@ -238,9 +239,9 @@ export class Game {
     return this.cfg.endless ? Infinity : this.cfg.waves.length;
   }
 
-  /** 无尽模式敌人血量随波数膨胀，对冲玩家防线的指数成长 */
+  /** 无尽模式敌人血量随波数膨胀（第 4 波起计），对冲玩家防线的指数成长 */
   private hpMul(): number {
-    return this.cfg.endless ? 1 + this.launched * 0.09 : 1;
+    return this.cfg.endless ? 1 + Math.max(0, this.launched - 3) * 0.1 : 1;
   }
 
   /** 固定进攻走廊：整关的登陆都发生在这些走廊附近，开局即可见 */
