@@ -211,30 +211,36 @@ export class Game {
     this.banner(this.cfg.name, `任务目标 // ${this.cfg.objective}`, true, 4200);
   }
 
-  /** 波次配置：战役取表，无尽模式程序生成（难度随波数递增） */
+  /** 波次配置：战役取表，无尽模式程序生成。
+   *  无尽的后期原则：数量不设上限、空中压力优先膨胀，用巨量敌群压制成型的防线。 */
   private waveAt(i: number): WaveCfg {
     if (!this.cfg.endless) return this.cfg.waves[i];
     const types = ['swarm', 'runner', 'armored', 'splitter'] as const;
     const drops: WaveCfg['drops'] = [];
-    const nDrops = Math.min(2 + Math.floor(i / 2), 5);
+    const nDrops = Math.min(2 + Math.floor(i / 2), 6);
     for (let d = 0; d < nDrops; d++) {
       const type = types[(i + d * 2) % types.length];
-      const base = 7 + i * 1.2;
-      drops.push({ type, n: Math.round(type === 'armored' ? base * 0.45 : base) });
+      const base = 7 + i * 1.6;
+      drops.push({ type, n: Math.round(type === 'armored' ? base * 0.5 : base) });
     }
     return {
-      prewave: i === 0 ? 18 : Math.max(15, 25 - i * 0.4),
+      prewave: i === 0 ? 18 : Math.max(13, 24 - i * 0.5),
       drops,
-      jammers: i >= 2 && i % 3 === 2 ? Math.min(3, 1 + Math.floor(i / 7)) : 0,
-      divers: i >= 3 ? Math.min(4, 1 + Math.floor(i / 4)) : 0,
-      gunships: i >= 5 && i % 2 === 1 ? Math.min(2, 1 + Math.floor(i / 9)) : 0,
-      wings: i >= 2 ? Math.min(22, 5 + i) : 0,
-      boss: i > 0 && i % 10 === 9, // 每 10 波一艘母舰
+      jammers: i >= 2 ? Math.min(4, Math.floor((i + 2) / 4)) : 0,
+      divers: i >= 3 ? 1 + Math.floor(i / 2) : 0,        // 无上限：波20 = 11 艘
+      gunships: i >= 5 ? Math.floor(i / 3) : 0,          // 无上限：波20 = 6 艘
+      wings: i >= 2 ? Math.round(6 + i * 2.2) : 0,       // 无上限：波20 = 50 只
+      boss: i > 0 && i % 8 === 7, // 每 8 波一艘母舰
     };
   }
 
   private totalWaves(): number {
     return this.cfg.endless ? Infinity : this.cfg.waves.length;
+  }
+
+  /** 无尽模式敌人血量随波数膨胀，对冲玩家防线的指数成长 */
+  private hpMul(): number {
+    return this.cfg.endless ? 1 + this.launched * 0.09 : 1;
   }
 
   /** 固定进攻走廊：整关的登陆都发生在这些走廊附近，开局即可见 */
@@ -937,6 +943,7 @@ export class Game {
   }
 
   private baseOrbital(kind: OrbitalKind, hp: number): Orbital {
+    hp = Math.round(hp * this.hpMul());
     return {
       kind, hp, maxHp: hp, alive: true,
       group: new THREE.Group(), pos: new THREE.Vector3(),
@@ -1394,6 +1401,7 @@ export class Game {
   // ============ 地面单位 ============
 
   private spawnUnit(fromCell: number, type: string) {
+    if (this.units.length > 400) return; // 性能保险丝：同屏地面单位上限
     const def = GROUND_DEFS[type];
     const path = this.findPath(fromCell);
     if (!path || path.length < 2) return;
@@ -1416,7 +1424,8 @@ export class Game {
     mesh.position.copy(pos);
     this.root.add(mesh);
     this.units.push({
-      type, def, mesh, path, seg: 0, t: 0, hp: def.hp, alive: true, pos: pos.clone(),
+      type, def, mesh, path, seg: 0, t: 0, hp: Math.round(def.hp * this.hpMul()),
+      alive: true, pos: pos.clone(),
       slowUntilFrame: false, offset, speedMul: 0.85 + this.rand() * 0.3,
     });
   }
