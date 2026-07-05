@@ -22,9 +22,9 @@ export interface TowerDef {
 }
 
 export const TOWER_DEFS: TowerDef[] = [
-  { key: 'pulse',     name: '脉冲炮',   sub: 'PULSE',   icon: '▲', cost: 100, kind: 'ground',  range: 0.36, damage: 26, cooldown: 0.85, desc: '基础对地单体' },
-  { key: 'tesla',     name: '磁暴塔',   sub: 'TESLA',   icon: '◈', cost: 140, kind: 'ground',  range: 0.30, damage: 0,  cooldown: 0,    desc: '范围减速 40%' },
-  { key: 'laser',     name: '轨道激光', sub: 'O-LASER', icon: '║', cost: 170, kind: 'air',     range: 0.60, damage: 30, cooldown: 0,    desc: '对空持续射线·锁定增伤' },
+  { key: 'pulse',     name: '脉冲炮',   sub: 'PULSE',   icon: '▲', cost: 70,  kind: 'ground',  range: 0.36, damage: 28, cooldown: 0.85, desc: '基础对地单体·便宜耐用' },
+  { key: 'tesla',     name: '磁暴塔',   sub: 'TESLA',   icon: '◈', cost: 140, kind: 'ground',  range: 0.30, damage: 6,  cooldown: 0,    desc: '减速 40% + 电弧链击' },
+  { key: 'laser',     name: '轨道激光', sub: 'O-LASER', icon: '║', cost: 170, kind: 'air',     range: 0.60, damage: 22, cooldown: 0,    desc: '对空持续射线·锁定增伤' },
   { key: 'missile',   name: '破片导弹', sub: 'FRAG-M',  icon: '✦', cost: 190, kind: 'air',     range: 0.55, damage: 80, cooldown: 4.0,  desc: '对空范围爆发' },
   { key: 'radar',     name: '雷达站',   sub: 'RADAR',   icon: '◍', cost: 120, kind: 'support', range: 0.40, damage: 0,  cooldown: 0,    desc: '射程内塔 +25% 射速' },
   { key: 'prism',     name: '汇聚棱镜', sub: 'PRISM',   icon: '◆', cost: 220, kind: 'ground',  range: 0.42, damage: 42, cooldown: 1.5,  desc: '相邻每塔 +45% 伤害' },
@@ -56,7 +56,7 @@ const HORDE_MUL = 1.5;
 const WING_HP = 14;            // 飞行蜂群：极脆、极多，给防空当割草靶
 const WING_REWARD = 4;
 const WING_SPEED = 0.055;      // 角速度 rad/s，缓慢推进
-const WING_ALT = 1.1;          // 巡航高度
+const WING_ALT = 1.18;         // 巡航高度：拉高一点，空层视觉更分明
 const WING_IMPACT_DAMAGE = 2;
 const DIVER_HP = 60;
 const DIVER_REWARD = 22;
@@ -67,7 +67,7 @@ const GUNSHIP_HOVER = 1.16;       // 悬停高度
 const GUNSHIP_BOLT_DAMAGE = 4;
 const GUNSHIP_BOLT_INTERVAL = 2.4;
 
-const TRANSPORT_HP = 130;
+const TRANSPORT_HP = 200; // 拉高在轨血量：激光不能轻易在落地前打爆整船，拦截需要专注火力
 const TRANSPORT_REWARD = 45;   // 在轨击落 = 整船歼灭，重赏
 const JAMMER_HP = 110;
 const JAMMER_REWARD = 50;
@@ -127,6 +127,8 @@ interface Unit {
   type: string; def: GroundDef;
   mesh: THREE.Mesh; path: number[]; seg: number; t: number;
   hp: number; alive: boolean; pos: THREE.Vector3; slowUntilFrame: boolean;
+  offset: THREE.Vector3;  // 横向散布：避免同舱单位叠成一条线
+  speedMul: number;       // 个体速度抖动
 }
 
 interface Satellite {
@@ -1375,12 +1377,17 @@ export class Game {
       wireframe: true, transparent: true, opacity: 0.95,
     });
     const mesh = new THREE.Mesh(geo, mat);
-    const pos = this.grid.cells[fromCell].center.clone().multiplyScalar(1.02);
+    const n0 = this.grid.cells[fromCell].center;
+    // 横向散布：随机切向偏移，让同舱部队铺开成松散团
+    const rt = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5).normalize();
+    const offset = new THREE.Vector3().crossVectors(n0, rt).normalize()
+      .multiplyScalar(this.rand() * 0.024);
+    const pos = n0.clone().add(offset).normalize().multiplyScalar(1.02);
     mesh.position.copy(pos);
     this.root.add(mesh);
     this.units.push({
       type, def, mesh, path, seg: 0, t: 0, hp: def.hp, alive: true, pos: pos.clone(),
-      slowUntilFrame: false,
+      slowUntilFrame: false, offset, speedMul: 0.85 + this.rand() * 0.3,
     });
   }
 
@@ -1389,7 +1396,7 @@ export class Game {
     const teslas = this.towers.filter((t) => t.def.key === 'tesla' && !t.jammed);
     for (const u of this.units) {
       if (!u.alive) continue;
-      let speed = u.def.speed;
+      let speed = u.def.speed * u.speedMul;
       for (const ts of teslas) {
         if (this.grid.cells[ts.cellId].center.angleTo(u.pos) < this.towerRange(ts)) {
           speed *= 0.6 - (ts.level - 1) * 0.08;
@@ -1416,7 +1423,7 @@ export class Game {
           else { this.killUnit(u, false); continue; }
         }
       }
-      u.pos.copy(from).lerp(to, u.t).normalize().multiplyScalar(1.02);
+      u.pos.copy(from).lerp(to, u.t).add(u.offset).normalize().multiplyScalar(1.02);
       u.mesh.position.copy(u.pos);
       u.mesh.rotation.x += dt * 3.1;
       u.mesh.rotation.y += dt * 2.3;
@@ -1528,15 +1535,18 @@ export class Game {
         continue;
       }
       if (tw.def.key === 'tesla') {
-        // 减速场电弧演出：周期性劈向场内敌人
-        tw.cooldown -= dt;
+        // 减速场 + 电弧链击：周期性劈向场内敌人并造成伤害
+        tw.cooldown -= dt * rateMul;
         if (tw.cooldown <= 0) {
           const orbPos = towerN.clone().multiplyScalar(towerH + 0.072);
+          const arcDmg = this.towerDamage(tw);
           let arcs = 0;
           for (const u of this.units) {
             if (!u.alive || arcs >= 2) continue;
             if (towerN.angleTo(u.pos) > this.towerRange(tw)) continue;
             this.spawnArc(orbPos, u.pos.clone());
+            u.hp -= Math.max(1, arcDmg - u.def.armor * 0.5);
+            if (u.hp <= 0) this.killUnit(u, true);
             arcs++;
           }
           if (arcs > 0) { this.spawnFlash(orbPos, COL_CYAN, 0.008, 0.14); sfx.play('arc', 250); }
@@ -1624,7 +1634,7 @@ export class Game {
     if (!target) { this.clearLock(tw); return; }
 
     tw.lockT = Math.min(3, tw.lockT + dt);
-    const ramp = 1 + (tw.lockT / 3) * 1.5; // 1 → 2.5
+    const ramp = 1 + (tw.lockT / 3) * 1.2; // 1 → 2.2
     this.damageOrbital(target, this.towerDamage(tw) * ramp * rateMul * dt);
 
     // 持续体积光柱：锁定越久越粗越亮
