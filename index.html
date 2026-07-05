@@ -238,7 +238,7 @@
     .lv-num { font-size: 10px; letter-spacing: 2px; color: var(--cyan-dim); }
     .lv-name { font-size: 15px; letter-spacing: 3px; margin-top: 4px; }
     .lv-stars { font-size: 11px; margin-top: 5px; color: var(--amber); letter-spacing: 3px; min-height: 14px; }
-    #menu-start { margin-top: 34px; }
+    #endless-best { color: var(--amber); font-size: 11px; }
 
     /* ===== 教学提示 ===== */
     #tutorial {
@@ -377,7 +377,10 @@
     <div id="menu-sub">EARTH DEFENSE // ORBITAL COMMAND</div>
     <div id="menu-flavor"></div>
     <div id="level-grid"></div>
-    <button class="big-btn primary" id="menu-start">开始作战 // ENGAGE</button>
+    <div style="display:flex; gap:14px; margin-top:34px;">
+      <button class="big-btn primary" id="menu-start">开始作战 // ENGAGE</button>
+      <button class="big-btn" id="menu-endless">无尽模式 <span id="endless-best"></span></button>
+    </div>
   </div>
 
   <div id="tutorial"></div>

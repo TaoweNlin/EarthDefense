@@ -31,6 +31,7 @@ export interface LevelCfg {
   startEnergy: number;
   towers: string[];
   waves: WaveCfg[];
+  endless?: boolean;      // 无尽模式：波次程序生成，难度递增
 }
 
 const T1 = ['pulse'];
@@ -105,7 +106,7 @@ export const LEVELS: LevelCfg[] = [
   {
     id: 6, name: '流星雨', sub: 'METEOR FALL',
     flavor: '大量小型登陆舱多点着陆，裂变体死后仍会分裂扑城。', objective: '抵御疯狂登陆 · 四走廊多线',
-    seed: 17320508, cities: 3, cityLayout: 'global', cityCluster: 0.4,
+    seed: 17320508, cities: 2, cityLayout: 'global', cityCluster: 0.4,
     landingSpread: 2.6, lanes: 4, startEnergy: 340, towers: T5,
     waves: [
       { prewave: 18, drops: [{ type: 'swarm', n: 10 }, { type: 'swarm', n: 10 }] },
@@ -119,7 +120,7 @@ export const LEVELS: LevelCfg[] = [
   {
     id: 7, name: '寂静轨道', sub: 'DEAD ORBIT',
     flavor: '敌军空中力量全面展开：炮舰压顶、俯冲艇突袭。防御卫星已解锁。', objective: '夺回天空 · 立体防御',
-    seed: 22360679, cities: 3, cityLayout: 'global', cityCluster: 0.2,
+    seed: 22360679, cities: 2, cityLayout: 'global', cityCluster: 0.2,
     landingSpread: 3.0, lanes: 3, startEnergy: 380, towers: T7,
     waves: [
       { prewave: 18, drops: [{ type: 'swarm', n: 14 }], jammers: 1, wings: 10 },
@@ -132,9 +133,9 @@ export const LEVELS: LevelCfg[] = [
   },
   {
     id: 8, name: '母舰降临', sub: 'MOTHERSHIP',
-    flavor: '决战。五条走廊全面进攻，母舰在高轨持续投放登陆舱。', objective: '击落母舰 · 终结战争',
-    seed: 26457513, cities: 4, cityLayout: 'global', cityCluster: 0.0,
-    landingSpread: Math.PI, lanes: 5, startEnergy: 400, towers: T7,
+    flavor: '决战。中枢与卫星城背靠背，母舰在高轨持续投放登陆舱。', objective: '守住双子都会 · 击落母舰',
+    seed: 26457513, cities: 2, cityLayout: 'capital', cityCluster: 0.9,
+    landingSpread: 1.6, lanes: 5, startEnergy: 400, towers: T7,
     waves: [
       { prewave: 18, drops: [{ type: 'swarm', n: 16 }, { type: 'runner', n: 10 }] },
       { prewave: 24, drops: [{ type: 'armored', n: 9 }, { type: 'splitter', n: 7 }], jammers: 1, divers: 1, wings: 10 },
@@ -147,12 +148,25 @@ export const LEVELS: LevelCfg[] = [
   },
 ];
 
+// ============ 无尽模式 ============
+
+export const ENDLESS_LEVEL: LevelCfg = {
+  id: 99, name: '无尽防线', sub: 'ENDLESS',
+  flavor: '敌军的进攻永不停歇。坚守到最后一刻。',
+  objective: '无尽防线 · 波次难度递增',
+  seed: 88888888, cities: 2, cityLayout: 'cluster', cityCluster: 1.0,
+  landingSpread: 1.5, lanes: 3, startEnergy: 360, towers: T7,
+  waves: [], // 程序生成
+  endless: true,
+};
+
 // ============ 进度与会话 ============
 
 export interface Progress {
   unlocked: number;
   stars: Record<number, number>;
   tutorialDone: boolean;
+  endlessBest: number;
 }
 
 const PROG_KEY = 'earthdef-progress';
@@ -161,9 +175,9 @@ const SESSION_KEY = 'earthdef-session';
 export function loadProgress(): Progress {
   try {
     const raw = localStorage.getItem(PROG_KEY);
-    if (raw) return { unlocked: 1, stars: {}, tutorialDone: false, ...JSON.parse(raw) };
+    if (raw) return { unlocked: 1, stars: {}, tutorialDone: false, endlessBest: 0, ...JSON.parse(raw) };
   } catch { /* 损坏则重置 */ }
-  return { unlocked: 1, stars: {}, tutorialDone: false };
+  return { unlocked: 1, stars: {}, tutorialDone: false, endlessBest: 0 };
 }
 
 export function saveProgress(p: Progress) {

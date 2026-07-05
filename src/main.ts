@@ -4,14 +4,16 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { buildGoldberg, type Cell } from './goldberg';
 import { Game, TOWER_DEFS, type GameStats } from './game';
-import { LEVELS, loadProgress, saveProgress, getSession, setSession } from './levels';
+import { LEVELS, ENDLESS_LEVEL, loadProgress, saveProgress, getSession, setSession } from './levels';
 import { sfx } from './sound';
 
 // ---------- 关卡会话 ----------
 const progress = loadProgress();
 const session = getSession();
-const levelId = Math.min(Math.max(1, session.level), progress.unlocked, LEVELS.length);
-const level = LEVELS[levelId - 1];
+const isEndless = session.level === ENDLESS_LEVEL.id;
+const levelId = isEndless ? ENDLESS_LEVEL.id
+  : Math.min(Math.max(1, session.level), progress.unlocked, LEVELS.length);
+const level = isEndless ? ENDLESS_LEVEL : LEVELS[levelId - 1];
 
 // ---------- 常量 ----------
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -323,11 +325,34 @@ const game = new Game(earthGroup, grid, level, onGameEnd);
 (window as any).__grid = grid;
 
 // 关卡名显示在副标题
-document.getElementById('hud-sub')!.innerHTML =
-  `第 ${level.id} 关 · ${level.name} ${level.sub} <span class="ok" id="status-text">ONLINE</span>`;
+document.getElementById('hud-sub')!.innerHTML = (isEndless
+  ? `${level.name} ${level.sub}`
+  : `第 ${level.id} 关 · ${level.name} ${level.sub}`)
+  + ` <span class="ok" id="status-text">ONLINE</span>`;
 
 // ---------- 结算 ----------
 function onGameEnd(win: boolean, stats: GameStats) {
+  if (isEndless) {
+    // 无尽模式：只记录坚守波数
+    const survived = Math.max(0, game.launched - 1);
+    progress.endlessBest = Math.max(progress.endlessBest, survived);
+    saveProgress(progress);
+    const ovE = document.getElementById('overlay')!;
+    ovE.classList.add('show', 'lose');
+    ovE.classList.remove('win');
+    document.getElementById('ov-title')!.textContent = '防线终结';
+    document.getElementById('ov-sub')!.textContent = 'ENDLESS RUN OVER';
+    document.getElementById('ov-stars')!.textContent = '';
+    const emm = Math.floor(stats.duration / 60), ess = stats.duration % 60;
+    document.getElementById('ov-stats')!.innerHTML = `
+      <span>坚守波数</span><b>${survived}</b>
+      <span>历史最佳</span><b>${progress.endlessBest}</b>
+      <span>地面击杀</span><b>${stats.kills}</b>
+      <span>在轨拦截</span><b>${stats.intercepted}</b>
+      <span>坚守时长</span><b>${emm}:${String(ess).padStart(2, '0')}</b>`;
+    (document.getElementById('ov-next') as HTMLButtonElement).style.display = 'none';
+    return;
+  }
   if (win) {
     progress.stars[level.id] = Math.max(progress.stars[level.id] ?? 0, stats.stars);
     progress.unlocked = Math.max(progress.unlocked, Math.min(level.id + 1, LEVELS.length));
@@ -388,12 +413,25 @@ document.getElementById('ov-menu')!.addEventListener('click', () => {
   }
   document.getElementById('menu-start')!.addEventListener('click', () => {
     sfx.play('click');
-    if (levelId === progress.unlocked && !session.autostart) {
+    if (levelId === progress.unlocked && !session.autostart && !isEndless) {
       // 直接在当前已加载的行星上开战
       menu.classList.remove('show');
       startBattle();
     } else {
       setSession(progress.unlocked, true);
+      location.reload();
+    }
+  });
+  // 无尽模式入口
+  document.getElementById('endless-best')!.textContent =
+    progress.endlessBest > 0 ? `· 最佳 ${progress.endlessBest} 波` : '';
+  document.getElementById('menu-endless')!.addEventListener('click', () => {
+    sfx.play('click');
+    if (isEndless && !session.autostart) {
+      menu.classList.remove('show');
+      startBattle();
+    } else {
+      setSession(ENDLESS_LEVEL.id, true);
       location.reload();
     }
   });

@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import type { GoldbergGrid, Cell } from './goldberg';
-import type { LevelCfg } from './levels';
+import type { LevelCfg, WaveCfg } from './levels';
 import { sfx } from './sound';
 
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -204,11 +204,37 @@ export class Game {
   start() {
     if (this.phase !== 'idle') return;
     this.phase = 'prewave';
-    this.nextWaveT = this.cfg.waves[0].prewave;
+    this.nextWaveT = this.waveAt(0).prewave;
     this.initLanes();
     this.prepareLandings();
     this.showCountdown(true);
     this.banner(this.cfg.name, `任务目标 // ${this.cfg.objective}`, true, 4200);
+  }
+
+  /** 波次配置：战役取表，无尽模式程序生成（难度随波数递增） */
+  private waveAt(i: number): WaveCfg {
+    if (!this.cfg.endless) return this.cfg.waves[i];
+    const types = ['swarm', 'runner', 'armored', 'splitter'] as const;
+    const drops: WaveCfg['drops'] = [];
+    const nDrops = Math.min(2 + Math.floor(i / 2), 5);
+    for (let d = 0; d < nDrops; d++) {
+      const type = types[(i + d * 2) % types.length];
+      const base = 7 + i * 1.2;
+      drops.push({ type, n: Math.round(type === 'armored' ? base * 0.45 : base) });
+    }
+    return {
+      prewave: i === 0 ? 18 : Math.max(15, 25 - i * 0.4),
+      drops,
+      jammers: i >= 2 && i % 3 === 2 ? Math.min(3, 1 + Math.floor(i / 7)) : 0,
+      divers: i >= 3 ? Math.min(4, 1 + Math.floor(i / 4)) : 0,
+      gunships: i >= 5 && i % 2 === 1 ? Math.min(2, 1 + Math.floor(i / 9)) : 0,
+      wings: i >= 2 ? Math.min(22, 5 + i) : 0,
+      boss: i > 0 && i % 10 === 9, // 每 10 波一艘母舰
+    };
+  }
+
+  private totalWaves(): number {
+    return this.cfg.endless ? Infinity : this.cfg.waves.length;
   }
 
   /** 固定进攻走廊：整关的登陆都发生在这些走廊附近，开局即可见 */
@@ -300,12 +326,12 @@ export class Game {
         if (belt.length < this.cfg.cities) belt = land;
         const anchor = belt[Math.floor(this.rand() * belt.length)];
         picked = [anchor];
+        // 链式排布：沿赤道同向逐段延伸，城市链集中在一个防区内
         for (let i = 1; i < this.cfg.cities; i++) {
           const dir = anchor.center.clone()
-            .applyAxisAngle(new THREE.Vector3(0, 1, 0), (i / this.cfg.cities) * Math.PI * 2);
-          // 吸附时保持城市间最小间距，避免挤在同一块陆地
+            .applyAxisAngle(new THREE.Vector3(0, 1, 0), i * 0.62);
           const spaced = belt.filter((c) =>
-            picked.every((p) => c.center.angleTo(p.center) > 1.1));
+            picked.every((p) => c.center.angleTo(p.center) > 0.4));
           picked.push(this.snapToCell(dir, spaced.length ? spaced : belt, picked));
         }
         break;
@@ -327,7 +353,7 @@ export class Game {
         const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
         const e1 = new THREE.Vector3().crossVectors(n, ref).normalize();
         const e2 = new THREE.Vector3().crossVectors(n, e1).normalize();
-        const ringDist = 0.5;
+        const ringDist = 0.42;
         for (let i = 1; i < this.cfg.cities; i++) {
           const b = ((i - 1) / Math.max(1, this.cfg.cities - 1)) * Math.PI * 2 + 0.4;
           const dir = n.clone().multiplyScalar(Math.cos(ringDist))
@@ -338,9 +364,12 @@ export class Game {
         break;
       }
       default: {
-        // global：全球均匀铺开
+        // global：受聚集度约束的铺开（cluster 越低越散，但不会到对跖点）
         const anchor = land[Math.floor(this.rand() * land.length)];
-        picked = this.farthestPick(land, this.cfg.cities, anchor);
+        const maxAngle = 0.55 + (1 - this.cfg.cityCluster) * (Math.PI * 0.62 - 0.55);
+        let candidates = land.filter((c) => c.center.angleTo(anchor.center) <= maxAngle);
+        if (candidates.length < this.cfg.cities) candidates = land;
+        picked = this.farthestPick(candidates, this.cfg.cities, anchor);
       }
     }
     this.cityCenter = picked.reduce((v, c) => v.add(c.center), new THREE.Vector3()).normalize();
@@ -777,7 +806,7 @@ export class Game {
     for (const t of this.towers) if (t.perk?.key === 'siphon') this.energy += 1.5 * dt;
 
     // 连续进攻调度：倒计时到点就发起下一波，不等上一波清完
-    if (this.launched < this.cfg.waves.length) {
+    if (this.launched < this.totalWaves()) {
       this.nextWaveT -= dt;
       document.getElementById('cd-val')!.textContent = Math.max(0, Math.ceil(this.nextWaveT)).toString();
       if (this.nextWaveT <= 0) this.launchWave();
@@ -792,8 +821,8 @@ export class Game {
     this.animateIdle(dt);
     this.updateHud();
 
-    // 终局：全部波次已发起且战场清空
-    if (this.launched >= this.cfg.waves.length && this.fieldClear()) {
+    // 终局：全部波次已发起且战场清空（无尽模式没有胜利，只有败北记录）
+    if (!this.cfg.endless && this.launched >= this.totalWaves() && this.fieldClear()) {
       this.endGame(true);
     }
   }
@@ -807,7 +836,8 @@ export class Game {
   // ============ 波次与登陆 ============
 
   private prepareLandings() {
-    const cfg = this.cfg.waves[this.launched];
+    if (this.launched >= this.totalWaves()) return;
+    const cfg = this.waveAt(this.launched);
     if (!cfg) return;
     this.pending = [];
     for (let i = 0; i < cfg.drops.length; i++) {
@@ -876,7 +906,7 @@ export class Game {
     sfx.play('alarm');
     this.banner(`WAVE ${this.launched + 1}`, '敌袭 // HOSTILE INBOUND', false, 2600);
 
-    const cfg = this.cfg.waves[this.launched];
+    const cfg = this.waveAt(this.launched);
     cfg.drops.forEach((drop, i) => {
       const p = this.pending[i];
       const cargo = { type: drop.type, n: Math.round(drop.n * HORDE_MUL) };
@@ -896,9 +926,9 @@ export class Game {
 
     this.launched++;
     this.setWaveLabel();
-    if (this.launched < this.cfg.waves.length) {
+    if (this.launched < this.totalWaves()) {
       // 立即预告下一波：倒计时 + 登陆标记 + 航迹线与当前战斗并存
-      this.nextWaveT = this.cfg.waves[this.launched].prewave;
+      this.nextWaveT = this.waveAt(this.launched).prewave;
       this.prepareLandings();
       this.showCountdown(true);
     } else {
@@ -1926,8 +1956,9 @@ export class Game {
   }
 
   private setWaveLabel() {
-    document.getElementById('wave-val')!.textContent =
-      `${Math.min(this.launched + 1, this.cfg.waves.length)}/${this.cfg.waves.length}`;
+    document.getElementById('wave-val')!.textContent = this.cfg.endless
+      ? `${this.launched + 1}/∞`
+      : `${Math.min(this.launched + 1, this.cfg.waves.length)}/${this.cfg.waves.length}`;
   }
 
   private showCountdown(show: boolean) {
