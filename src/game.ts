@@ -47,7 +47,7 @@ interface Transport {
   phase: 'orbit' | 'descend' | 'deploy' | 'done';
   theta: number; basisN: THREE.Vector3; basisU: THREE.Vector3;
   descendT: number; unitsLeft: number; deployTimer: number;
-  marker: THREE.Group;
+  marker: THREE.Group; trail: THREE.Line;
 }
 interface Fx { obj: THREE.Object3D; ttl: number; max: number; kind: 'laser' | 'ring' }
 
@@ -334,12 +334,35 @@ export class Game {
     group.visible = false;
     this.root.add(group);
 
+    // 飞行轨迹线：环绕段（与飞行路径完全一致）+ 垂直降落段，玫红虚线
+    const trailPts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 96; i++) {
+      const th = -3.1 + (i / 96) * 3.1;
+      const r = this.orbitRadius(th);
+      trailPts.push(n.clone().multiplyScalar(Math.cos(th))
+        .addScaledVector(u, Math.sin(th)).multiplyScalar(r));
+    }
+    trailPts.push(n.clone().multiplyScalar(1.03)); // 降落段
+    const trailGeo = new THREE.BufferGeometry().setFromPoints(trailPts);
+    const trail = new THREE.Line(trailGeo, new THREE.LineDashedMaterial({
+      color: COL_ROSE, transparent: true, opacity: 0.45,
+      dashSize: 0.03, gapSize: 0.022, depthWrite: false,
+    }));
+    trail.computeLineDistances();
+    trail.renderOrder = 8;
+    this.root.add(trail);
+
     this.transports.push({
       group, landCell, phase: 'orbit',
       theta: -3.1 - delay * 0.35, basisN: n, basisU: u,
       descendT: 0, unitsLeft: units, deployTimer: 0,
-      marker: this.markers[0], // 关联最早的 marker（近似即可）
+      marker: this.markers[0], trail,
     });
+  }
+
+  /** 环绕段的轨道高度：远处 1.55，接近登陆点上方降至 1.2 */
+  private orbitRadius(theta: number): number {
+    return 1.55 - Math.max(0, (theta + 1.2) / 1.2) * 0.35;
   }
 
   private updateTransports(dt: number) {
@@ -349,7 +372,8 @@ export class Game {
         tr.theta += dt * 0.55;
         if (tr.theta < -3.05) continue; // 延迟出场
         tr.group.visible = true;
-        const r = 1.55 - Math.max(0, (tr.theta + 1.2) / 1.2) * 0.35; // 逐渐降轨
+        tr.trail.visible = true;
+        const r = this.orbitRadius(tr.theta);
         const pos = tr.basisN.clone().multiplyScalar(Math.cos(tr.theta))
           .addScaledVector(tr.basisU, Math.sin(tr.theta)).multiplyScalar(r);
         tr.group.position.copy(pos);
@@ -375,6 +399,7 @@ export class Game {
           tr.phase = 'done';
           this.spawnRing(tr.group.position.clone(), COL_ROSE, 0.06);
           this.root.remove(tr.group);
+          this.root.remove(tr.trail);
           // 移除一个登陆标记
           const m = this.markers.shift();
           if (m) this.root.remove(m);
