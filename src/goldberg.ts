@@ -163,9 +163,9 @@ export function buildGoldberg(frequency: number, seed = 1337): GoldbergGrid {
     cells.forEach((c, i) => (c.terrain = next[i] as Terrain));
   }
 
-  // --- 5.5 山地：平滑后陆地中噪声最高的格子 ---
+  // --- 5.5 山地：平滑后陆地中噪声最高的格子（约占陆地 1/3，平原为主） ---
   for (const c of cells) {
-    if (c.terrain === 'land' && c.elevation > 0.565) c.terrain = 'mountain';
+    if (c.terrain === 'land' && c.elevation > 0.58) c.terrain = 'mountain';
   }
 
   // --- 6. 网格线 + 海岸线 ---

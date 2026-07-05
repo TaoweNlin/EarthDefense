@@ -154,8 +154,8 @@ export const ENDLESS_LEVEL: LevelCfg = {
   id: 99, name: '无尽防线', sub: 'ENDLESS',
   flavor: '敌军的进攻永不停歇。坚守到最后一刻。',
   objective: '无尽防线 · 波次难度递增',
-  seed: 88888888, cities: 2, cityLayout: 'cluster', cityCluster: 1.0,
-  landingSpread: 1.5, lanes: 3, startEnergy: 360, towers: T7,
+  seed: 88888888, cities: 2, cityLayout: 'global', cityCluster: 0.8,
+  landingSpread: 1.6, lanes: 3, startEnergy: 360, towers: T7,
   waves: [], // 程序生成
   endless: true,
 };
