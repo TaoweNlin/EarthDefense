@@ -1,8 +1,8 @@
 {
   "name": "earthdef",
-  "private": true,
   "version": "0.1.0",
   "description": "A Three.js holographic globe tower-defense prototype.",
+  "homepage": "https://taowenlin.github.io/EarthDefense/",
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
