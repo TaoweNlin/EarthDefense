@@ -112,6 +112,32 @@
       position: absolute; top: 7px; right: 10px; font-size: 11px; color: var(--cyan-dim);
       border: 1px solid var(--cyan-faint); padding: 1px 5px;
     }
+    /* ===== 塔信息面板 ===== */
+    #hud-tower {
+      bottom: 36px; right: 44px; width: 236px; display: none; pointer-events: auto;
+    }
+    #hud-tower.show { display: block; }
+    .tw-stats { font-size: 11px; letter-spacing: 1px; line-height: 1.9; color: rgba(34, 211, 238, 0.75); }
+    .tw-stats b { color: var(--amber); font-weight: 400; }
+    .tw-btns { display: flex; gap: 8px; margin-top: 10px; }
+    .tw-btn {
+      flex: 1; padding: 7px 0; cursor: pointer;
+      font-family: inherit; font-size: 11px; letter-spacing: 2px;
+      color: var(--amber); background: rgba(251, 191, 36, 0.08);
+      border: 1px solid rgba(251, 191, 36, 0.4);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      transition: all 0.15s;
+    }
+    .tw-btn:hover { background: rgba(251, 191, 36, 0.18); }
+    .tw-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .tw-btn.sell { color: var(--cyan); border-color: var(--cyan-dim); background: rgba(34, 211, 238, 0.06); }
+    .tw-btn.sell:hover { background: rgba(34, 211, 238, 0.14); }
+
+    /* ===== 迷你地球仪 ===== */
+    #minimap { bottom: 36px; left: 44px; }
+    #mm-canvas { width: 168px; height: 168px; }
+    #mm-canvas canvas { width: 100% !important; height: 100% !important; }
+
     #build-hint {
       position: fixed; bottom: 132px; left: 50%; transform: translateX(-50%);
       font-size: 12px; letter-spacing: 3px; color: var(--amber);
@@ -185,6 +211,10 @@
       bottom: 16px; left: 44px;
       font-size: 11px; letter-spacing: 2px; color: rgba(34, 211, 238, 0.35);
     }
+    #hud-build .tower-card { width: 108px; padding: 10px 12px; }
+    #hud-build .tc-icon { font-size: 18px; }
+    #hud-build .tc-name { font-size: 12px; }
+    #hud-build .tc-cost { font-size: 12px; }
 
     /* ===== 装饰 ===== */
     .corner { position: fixed; width: 26px; height: 26px; z-index: 10; pointer-events: none;
@@ -237,16 +267,22 @@
     <div><span class="k">TERRAIN</span> <span id="cell-terrain">—</span></div>
   </div>
 
-  <div class="hud" id="hud-build">
-    <div class="panel tower-card" id="card-pulse">
-      <div class="tc-key">1</div>
-      <div class="tc-icon">▲</div>
-      <div class="tc-name">脉冲炮</div>
-      <div class="tc-sub">PULSE CANNON</div>
-      <div class="tc-cost">⚡ 100</div>
+  <div class="hud" id="hud-build"></div>
+  <div id="build-hint">部署模式 // 点击格子建造 · 右键取消</div>
+
+  <div class="hud panel" id="hud-tower">
+    <div class="p-label" id="tw-name">—</div>
+    <div class="tw-stats" id="tw-stats"></div>
+    <div class="tw-btns">
+      <button class="tw-btn" id="tw-upgrade">升级 ⚡<span id="tw-upcost">0</span></button>
+      <button class="tw-btn sell" id="tw-sell">出售 +<span id="tw-sellval">0</span></button>
     </div>
   </div>
-  <div id="build-hint">部署模式 // 点击陆地格子建造 · 右键取消</div>
+
+  <div class="hud panel" id="minimap">
+    <div class="p-label">全球威胁 GLOBAL THREATS</div>
+    <div id="mm-canvas"></div>
+  </div>
 
   <div class="hud" id="countdown">敌方登陆舱进入轨道 <b id="cd-val">10</b>s</div>
 
@@ -263,7 +299,7 @@
     <button id="ov-btn">重新部署 // RESTART</button>
   </div>
 
-  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1] 建塔 · [空格] 暂停</div>
+  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1-6] 选塔 · 点塔查看/升级 · [空格] 暂停</div>
 
   <div class="corner" id="c-tl"></div>
   <div class="corner" id="c-tr"></div>

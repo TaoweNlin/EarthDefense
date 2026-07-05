@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { fbm } from './noise';
 
-export type Terrain = 'ocean' | 'land';
+export type Terrain = 'ocean' | 'land' | 'mountain';
 
 export interface Cell {
   id: number;
@@ -12,6 +12,7 @@ export interface Cell {
   polygon: THREE.Vector3[];   // 按顺序排列的顶点（单位球面上）
   neighbors: number[];
   terrain: Terrain;
+  elevation: number;          // fbm 噪声原值
   isPentagon: boolean;
 }
 
@@ -140,6 +141,7 @@ export function buildGoldberg(frequency: number, seed = 1337): GoldbergGrid {
       polygon: sorted,
       neighbors: [],
       terrain,
+      elevation: nv,
       isPentagon: fs.length === 5,
     };
   });
@@ -161,6 +163,11 @@ export function buildGoldberg(frequency: number, seed = 1337): GoldbergGrid {
     cells.forEach((c, i) => (c.terrain = next[i] as Terrain));
   }
 
+  // --- 5.5 山地：平滑后陆地中噪声最高的格子 ---
+  for (const c of cells) {
+    if (c.terrain === 'land' && c.elevation > 0.565) c.terrain = 'mountain';
+  }
+
   // --- 6. 网格线 + 海岸线 ---
   const gridEdges: THREE.Vector3[] = [];
   const coastEdges: THREE.Vector3[] = [];
@@ -169,7 +176,7 @@ export function buildGoldberg(frequency: number, seed = 1337): GoldbergGrid {
     const a = centroids[rec.faces[0]];
     const b = centroids[rec.faces[1]];
     gridEdges.push(a.clone(), b.clone());
-    if (cells[rec.v1].terrain !== cells[rec.v2].terrain) {
+    if ((cells[rec.v1].terrain === 'ocean') !== (cells[rec.v2].terrain === 'ocean')) {
       coastEdges.push(a.clone(), b.clone());
     }
   }

@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { buildGoldberg, type Cell } from './goldberg';
-import { Game, TOWER_RANGE_RAD } from './game';
+import { Game, TOWER_DEFS } from './game';
 
 // ---------- 常量 ----------
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -206,6 +206,23 @@ earthGroup.add(coastLines);
   earthGroup.add(pentaDots);
 }
 
+// 山地：格子中心竖起小线框峰
+{
+  const peakGeo = new THREE.ConeGeometry(0.013, 0.028, 4);
+  const peakEdges = new THREE.EdgesGeometry(peakGeo);
+  const peakMat = new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.55 });
+  for (const c of grid.cells) {
+    if (c.terrain !== 'mountain') continue;
+    const peak = new THREE.LineSegments(peakEdges, peakMat);
+    const n = c.center.clone();
+    peak.position.copy(n.clone().multiplyScalar(1.002));
+    peak.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+    peak.translateY(0.014);
+    peak.renderOrder = 5;
+    earthGroup.add(peak);
+  }
+}
+
 // ---------- 轨道环 ----------
 const orbitGroup = new THREE.Group();
 scene.add(orbitGroup);
@@ -287,8 +304,9 @@ function setHover(cell: Cell | null) {
   const info = game.cellInfo(cell.id);
   tEl.textContent = info === 'city' ? '城市 CITY'
     : info === 'tower' ? '防御塔 TOWER'
-    : cell.terrain === 'land' ? '陆地 LAND' : '海洋 OCEAN';
-  tEl.className = cell.terrain === 'land' ? 'v-land' : '';
+    : cell.terrain === 'mountain' ? '山地 MTN·远程射程+25%'
+    : cell.terrain === 'land' ? '陆地 LAND' : '海洋 OCEAN·平台+60⚡';
+  tEl.className = cell.terrain !== 'ocean' ? 'v-land' : '';
 }
 
 // ---------- 交互：拖拽旋转（带惯性）、滚轮缩放、悬停拾取 ----------
@@ -298,42 +316,69 @@ const game = new Game(earthGroup, grid);
 (window as any).__game = game;
 (window as any).__grid = grid;
 
-// ---------- 建造模式 ----------
-let buildMode = false;
-const buildCard = document.getElementById('card-pulse')!;
+// ---------- 建造模式（6 塔卡片） ----------
+let selectedDef: string | null = null;
 const buildHint = document.getElementById('build-hint')!;
 
-function setBuildMode(on: boolean) {
-  buildMode = on;
-  buildCard.classList.toggle('selected', on);
-  buildHint.classList.toggle('show', on);
-  rangePreview.visible = false;
+// 生成建造卡
+{
+  const bar = document.getElementById('hud-build')!;
+  TOWER_DEFS.forEach((def, i) => {
+    const card = document.createElement('div');
+    card.className = 'panel tower-card';
+    card.dataset.key = def.key;
+    card.innerHTML = `
+      <div class="tc-key">${i + 1}</div>
+      <div class="tc-icon">${def.icon}</div>
+      <div class="tc-name">${def.name}</div>
+      <div class="tc-sub">${def.sub}</div>
+      <div class="tc-cost">⚡ ${def.cost}</div>`;
+    card.addEventListener('click', () => selectDef(selectedDef === def.key ? null : def.key));
+    bar.appendChild(card);
+  });
 }
-buildCard.addEventListener('click', () => setBuildMode(!buildMode));
+
+function selectDef(key: string | null) {
+  selectedDef = key;
+  document.querySelectorAll<HTMLElement>('.tower-card').forEach((c) =>
+    c.classList.toggle('selected', c.dataset.key === key));
+  const def = TOWER_DEFS.find((d) => d.key === key);
+  if (def) buildHint.textContent = `部署 ${def.name} // ${def.desc} · 右键取消`;
+  buildHint.classList.toggle('show', !!key);
+  rangePreview.visible = false;
+  if (key) selectTowerCell(null);
+}
+
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Digit1') setBuildMode(!buildMode);
-  if (e.code === 'Escape') setBuildMode(false);
+  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].indexOf(e.code);
+  if (idx >= 0 && idx < TOWER_DEFS.length) {
+    selectDef(selectedDef === TOWER_DEFS[idx].key ? null : TOWER_DEFS[idx].key);
+  }
+  if (e.code === 'Escape') { selectDef(null); selectTowerCell(null); }
   if (e.code === 'Space') { e.preventDefault(); setPaused(!paused); }
 });
-window.addEventListener('contextmenu', (e) => { e.preventDefault(); setBuildMode(false); });
+window.addEventListener('contextmenu', (e) => { e.preventDefault(); selectDef(null); selectTowerCell(null); });
 document.getElementById('ov-btn')!.addEventListener('click', () => location.reload());
 
-// 射程预览圈
-const rangePreview = new THREE.LineLoop(
-  new THREE.BufferGeometry(),
-  new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.7, depthWrite: false }));
-rangePreview.renderOrder = 8;
-rangePreview.visible = false;
-earthGroup.add(rangePreview);
+// ---------- 射程圈（建造预览 + 已选中塔） ----------
+function makeRangeRing(color: string): THREE.LineLoop {
+  const ring = new THREE.LineLoop(
+    new THREE.BufferGeometry(),
+    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7, depthWrite: false }));
+  ring.renderOrder = 8;
+  ring.visible = false;
+  earthGroup.add(ring);
+  return ring;
+}
+const rangePreview = makeRangeRing('#22d3ee');
+const selectedRing = makeRangeRing('#fbbf24');
 
-function updateRangePreview(cell: Cell | null) {
-  if (!buildMode || !cell) { rangePreview.visible = false; return; }
-  const n = cell.center;
+function ringGeometry(n: THREE.Vector3, rangeRad: number): THREE.BufferGeometry {
   const ref = Math.abs(n.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
   const e1 = new THREE.Vector3().crossVectors(n, ref).normalize();
   const e2 = new THREE.Vector3().crossVectors(n, e1).normalize();
   const pts: THREE.Vector3[] = [];
-  const cr = Math.cos(TOWER_RANGE_RAD), sr = Math.sin(TOWER_RANGE_RAD);
+  const cr = Math.cos(rangeRad), sr = Math.sin(rangeRad);
   for (let i = 0; i < 64; i++) {
     const a = (i / 64) * Math.PI * 2;
     pts.push(n.clone().multiplyScalar(cr)
@@ -341,12 +386,60 @@ function updateRangePreview(cell: Cell | null) {
       .addScaledVector(e2, sr * Math.sin(a))
       .multiplyScalar(1.008));
   }
+  return new THREE.BufferGeometry().setFromPoints(pts);
+}
+
+function updateRangePreview(cell: Cell | null) {
+  const def = TOWER_DEFS.find((d) => d.key === selectedDef);
+  if (!def || !cell) { rangePreview.visible = false; return; }
+  const range = def.range * (cell.terrain === 'mountain' ? 1.25 : 1);
   rangePreview.geometry.dispose();
-  rangePreview.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+  rangePreview.geometry = ringGeometry(cell.center, range);
   (rangePreview.material as THREE.LineBasicMaterial).color.set(
-    game.canBuild(cell.id).ok ? '#22d3ee' : '#f43f5e');
+    game.canBuild(cell.id, def.key).ok ? '#22d3ee' : '#f43f5e');
   rangePreview.visible = true;
 }
+
+// ---------- 塔选中面板 ----------
+let selectedTowerCell: number | null = null;
+const twPanel = document.getElementById('hud-tower')!;
+
+function selectTowerCell(cellId: number | null) {
+  selectedTowerCell = cellId;
+  const tower = cellId !== null ? game.towerAt(cellId) : null;
+  twPanel.classList.toggle('show', !!tower);
+  selectedRing.visible = false;
+  if (!tower) return;
+  refreshTowerPanel();
+  selectedRing.geometry.dispose();
+  selectedRing.geometry = ringGeometry(grid.cells[tower.cellId].center, game.towerRange(tower));
+  selectedRing.visible = tower.def.kind !== 'air' ? true : true;
+}
+
+function refreshTowerPanel() {
+  const tower = selectedTowerCell !== null ? game.towerAt(selectedTowerCell) : null;
+  if (!tower) { twPanel.classList.remove('show'); return; }
+  document.getElementById('tw-name')!.textContent =
+    `${tower.def.name} ${tower.def.sub} · LV.${tower.level}`;
+  const dmg = Math.round(game.towerDamage(tower));
+  const range = game.towerRange(tower).toFixed(2);
+  document.getElementById('tw-stats')!.innerHTML =
+    tower.def.damage > 0
+      ? `伤害 <b>${dmg}</b> · 射程 <b>${range}</b><br>${tower.def.desc}`
+      : `射程 <b>${range}</b><br>${tower.def.desc}`;
+  const upBtn = document.getElementById('tw-upgrade') as HTMLButtonElement;
+  const maxed = tower.level >= 3;
+  upBtn.disabled = maxed || game.energy < game.upgradeCost(tower);
+  document.getElementById('tw-upcost')!.textContent = maxed ? 'MAX' : String(game.upgradeCost(tower));
+  document.getElementById('tw-sellval')!.textContent = String(Math.round(tower.invested * 0.6));
+}
+
+document.getElementById('tw-upgrade')!.addEventListener('click', () => {
+  if (selectedTowerCell !== null && game.tryUpgrade(selectedTowerCell)) selectTowerCell(selectedTowerCell);
+});
+document.getElementById('tw-sell')!.addEventListener('click', () => {
+  if (selectedTowerCell !== null) { game.sell(selectedTowerCell); selectTowerCell(null); }
+});
 
 // ---------- 暂停 ----------
 let paused = false;
@@ -354,6 +447,83 @@ function setPaused(on: boolean) {
   paused = on;
   document.getElementById('paused')!.classList.toggle('show', on);
 }
+
+// ---------- 迷你地球仪 ----------
+const mm = (() => {
+  const container = document.getElementById('mm-canvas')!;
+  const mmRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  mmRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  mmRenderer.setSize(168, 168);
+  container.appendChild(mmRenderer.domElement);
+
+  const mmScene = new THREE.Scene();
+  const mmCam = new THREE.PerspectiveCamera(42, 1, 0.1, 10);
+  const mmRoot = new THREE.Group();
+  mmScene.add(mmRoot);
+
+  // 线框球 + 海岸线
+  mmRoot.add(new THREE.Mesh(
+    new THREE.SphereGeometry(1, 20, 14),
+    new THREE.MeshBasicMaterial({ color: COL_CYAN, wireframe: true, transparent: true, opacity: 0.08 })));
+  {
+    const pos = new Float32Array(grid.coastEdges.length * 3);
+    grid.coastEdges.forEach((p, i) => pos.set([p.x, p.y, p.z], i * 3));
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    mmRoot.add(new THREE.LineSegments(g,
+      new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.5 })));
+  }
+
+  // 动态点集工厂
+  function dynPoints(color: string, size: number, cap: number) {
+    const g = new THREE.BufferGeometry();
+    const arr = new Float32Array(cap * 3);
+    g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    g.setDrawRange(0, 0);
+    const p = new THREE.Points(g, new THREE.PointsMaterial({
+      color, size, sizeAttenuation: false, transparent: true, opacity: 0.95, depthWrite: false }));
+    mmRoot.add(p);
+    return { arr, geo: g };
+  }
+  const cityDots = dynPoints('#fbbf24', 5, 8);
+  const towerDots = dynPoints('#22d3ee', 3.5, 128);
+  const threatDots = dynPoints('#f43f5e', 4.5, 256);
+  const threatPool = Array.from({ length: 256 }, () => new THREE.Vector3());
+
+  function update() {
+    mmRoot.quaternion.copy(earthGroup.quaternion);
+    mmCam.position.copy(camera.position).normalize().multiplyScalar(2.75);
+    mmCam.lookAt(0, 0, 0);
+
+    let n = 0;
+    for (const c of game.cities) {
+      if (!c.alive) continue;
+      const p = grid.cells[c.cellId].center;
+      cityDots.arr.set([p.x, p.y, p.z], n * 3); n++;
+    }
+    cityDots.geo.setDrawRange(0, n);
+    cityDots.geo.attributes.position.needsUpdate = true;
+
+    n = 0;
+    for (const t of game.towers) {
+      if (n >= 128) break;
+      const p = grid.cells[t.cellId].center;
+      towerDots.arr.set([p.x, p.y, p.z], n * 3); n++;
+    }
+    towerDots.geo.setDrawRange(0, n);
+    towerDots.geo.attributes.position.needsUpdate = true;
+
+    const cnt = game.threatPoints(threatPool);
+    for (let i = 0; i < cnt; i++) {
+      threatDots.arr.set([threatPool[i].x, threatPool[i].y, threatPool[i].z], i * 3);
+    }
+    threatDots.geo.setDrawRange(0, cnt);
+    threatDots.geo.attributes.position.needsUpdate = true;
+
+    mmRenderer.render(mmScene, mmCam);
+  }
+  return { update };
+})();
 
 // 相机绕地球做轨道运动：拖拽改变经纬角，星空/轨道环随之产生视差
 const raycaster = new THREE.Raycaster();
@@ -379,10 +549,13 @@ window.addEventListener('pointerup', (e) => {
   // 位移极小视为点击
   if (e.button === 0 && Math.hypot(e.clientX - downX, e.clientY - downY) < 6) {
     const cell = pickCell();
-    if (cell && buildMode) {
-      if (game.tryBuild(cell.id)) {
-        if (game.energy < 100) setBuildMode(false);
-      }
+    if (!cell) return;
+    if (selectedDef) {
+      game.tryBuild(cell.id, selectedDef);
+    } else if (game.towerAt(cell.id)) {
+      selectTowerCell(cell.id);
+    } else {
+      selectTowerCell(null);
     }
   }
 });
@@ -447,6 +620,7 @@ window.addEventListener('resize', () => {
 });
 
 // ---------- 主循环 ----------
+let panelRefreshT = 0;
 const clock = new THREE.Clock();
 function tick() {
   requestAnimationFrame(tick);
@@ -484,6 +658,11 @@ function tick() {
   updateRangePreview(hovered);
 
   game.update(paused ? 0 : dt);
+  mm.update();
+
+  // 塔面板低频刷新（能源变化影响升级按钮可用性）
+  panelRefreshT -= dt;
+  if (panelRefreshT <= 0) { panelRefreshT = 0.25; refreshTowerPanel(); }
 
   composer.render();
 }
