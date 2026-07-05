@@ -79,6 +79,7 @@ const earthMat = new THREE.ShaderMaterial({
   `,
 });
 const earthMesh = new THREE.Mesh(new THREE.SphereGeometry(R, 96, 96), earthMat);
+earthMesh.renderOrder = 1;
 earthGroup.add(earthMesh);
 
 // ---------- 大气层薄壳（背面渲染的渐变辉光） ----------
@@ -109,7 +110,9 @@ earthGroup.add(earthMesh);
       }
     `,
   });
-  earthGroup.add(new THREE.Mesh(new THREE.SphereGeometry(R * 1.07, 64, 64), atmoMat));
+  const atmo = new THREE.Mesh(new THREE.SphereGeometry(R * 1.07, 64, 64), atmoMat);
+  atmo.renderOrder = 8;
+  earthGroup.add(atmo);
 }
 
 // ---------- Goldberg 网格 ----------
@@ -129,10 +132,13 @@ function lineSegments(points: THREE.Vector3[], radius: number, color: THREE.Colo
 
 // 全球格网：极淡
 const gridLines = lineSegments(grid.gridEdges, R * 1.002, COL_CYAN, 0.045);
+gridLines.renderOrder = 3;
 earthGroup.add(gridLines);
 
 // 大陆轮廓：明亮
-earthGroup.add(lineSegments(grid.coastEdges, R * 1.004, COL_CYAN, 0.95));
+const coastLines = lineSegments(grid.coastEdges, R * 1.004, COL_CYAN, 0.95);
+coastLines.renderOrder = 4;
+earthGroup.add(coastLines);
 
 // 陆地填充：淡青色半透明面，让大陆形状一眼可辨
 {
@@ -152,7 +158,9 @@ earthGroup.add(lineSegments(grid.coastEdges, R * 1.004, COL_CYAN, 0.95));
     color: new THREE.Color('#134d63'), transparent: true, opacity: 0.55,
     depthWrite: false,
   });
-  earthGroup.add(new THREE.Mesh(g, m));
+  const landMesh = new THREE.Mesh(g, m);
+  landMesh.renderOrder = 2;
+  earthGroup.add(landMesh);
 }
 
 // 陆地点阵：格子中心 + 多边形顶点
@@ -173,7 +181,9 @@ earthGroup.add(lineSegments(grid.coastEdges, R * 1.004, COL_CYAN, 0.95));
     color: COL_CYAN, size: 0.012, transparent: true, opacity: 0.65,
     sizeAttenuation: true, depthWrite: false,
   });
-  earthGroup.add(new THREE.Points(g, m));
+  const landDots = new THREE.Points(g, m);
+  landDots.renderOrder = 5;
+  earthGroup.add(landDots);
 }
 
 // 五边形格子（遗迹位）：琥珀色小标记
@@ -190,7 +200,9 @@ earthGroup.add(lineSegments(grid.coastEdges, R * 1.004, COL_CYAN, 0.95));
     color: COL_AMBER, size: 0.028, transparent: true, opacity: 0.9,
     sizeAttenuation: true, depthWrite: false,
   });
-  earthGroup.add(new THREE.Points(g, m));
+  const pentaDots = new THREE.Points(g, m);
+  pentaDots.renderOrder = 6;
+  earthGroup.add(pentaDots);
 }
 
 // ---------- 轨道环 ----------
@@ -259,10 +271,12 @@ function setHover(cell: Cell | null) {
   const fg = new THREE.BufferGeometry();
   fg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
   hoverFill = new THREE.Mesh(fg, hoverFillMat);
+  hoverFill.renderOrder = 7;
   hoverGroup.add(hoverFill);
 
   const lg = new THREE.BufferGeometry().setFromPoints(poly);
   hoverLine = new THREE.LineLoop(lg, hoverLineMat);
+  hoverLine.renderOrder = 7;
   hoverGroup.add(hoverLine);
 
   hud.classList.add('show');
