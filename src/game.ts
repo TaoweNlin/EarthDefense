@@ -328,7 +328,8 @@ export class Game {
   private buildTowerVisual(def: TowerDef, cell: Cell): THREE.Group {
     const group = new THREE.Group();
     const n = cell.center.clone();
-    group.position.copy(n);
+    // 山地格是凸起高原，塔要站在顶面上
+    group.position.copy(n.clone().multiplyScalar(cell.terrain === 'mountain' ? 1.018 : 1.0));
     group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
 
     const fill = new THREE.MeshBasicMaterial({ color: new THREE.Color('#0d3644') });
@@ -457,7 +458,7 @@ export class Game {
     const cell = this.grid.cells[cellId];
     const g = new THREE.Group();
     const n = cell.center.clone();
-    g.position.copy(n.clone().multiplyScalar(1.006));
+    g.position.copy(n.clone().multiplyScalar(cell.terrain === 'mountain' ? 1.024 : 1.006));
     g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
     const mk = (r0: number, r1: number, op: number) => {
       const ring = new THREE.Mesh(

@@ -206,21 +206,45 @@ earthGroup.add(coastLines);
   earthGroup.add(pentaDots);
 }
 
-// 山地：格子中心竖起小线框峰
+// 山地：整块格子凸起成高原（顶面 + 侧壁 + 发光棱线）
+export const MOUNTAIN_TOP = 1.018;
 {
-  const peakGeo = new THREE.ConeGeometry(0.013, 0.028, 4);
-  const peakEdges = new THREE.EdgesGeometry(peakGeo);
-  const peakMat = new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.55 });
+  const fillPos: number[] = [];
+  const edgePos: number[] = [];
+  const push = (arr: number[], ...vs: THREE.Vector3[]) => {
+    for (const v of vs) arr.push(v.x, v.y, v.z);
+  };
   for (const c of grid.cells) {
     if (c.terrain !== 'mountain') continue;
-    const peak = new THREE.LineSegments(peakEdges, peakMat);
-    const n = c.center.clone();
-    peak.position.copy(n.clone().multiplyScalar(1.002));
-    peak.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
-    peak.translateY(0.014);
-    peak.renderOrder = 5;
-    earthGroup.add(peak);
+    const poly = c.polygon.map((p) => p.clone().normalize());
+    const top = poly.map((p) => p.clone().multiplyScalar(R * MOUNTAIN_TOP));
+    const bot = poly.map((p) => p.clone().multiplyScalar(R * 1.0));
+    const ctr = c.center.clone().multiplyScalar(R * MOUNTAIN_TOP);
+    for (let i = 0; i < poly.length; i++) {
+      const j = (i + 1) % poly.length;
+      // 顶面扇形
+      push(fillPos, ctr, top[i], top[j]);
+      // 侧壁（两个三角形）
+      push(fillPos, bot[i], bot[j], top[j]);
+      push(fillPos, bot[i], top[j], top[i]);
+      // 棱线：顶面轮廓 + 竖直棱
+      push(edgePos, top[i], top[j]);
+      push(edgePos, bot[i], top[i]);
+    }
   }
+  const fg = new THREE.BufferGeometry();
+  fg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(fillPos), 3));
+  fg.computeVertexNormals();
+  const fillMesh = new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color: new THREE.Color('#123c4c') }));
+  fillMesh.renderOrder = 2;
+  earthGroup.add(fillMesh);
+
+  const eg = new THREE.BufferGeometry();
+  eg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(edgePos), 3));
+  const edgeLines = new THREE.LineSegments(eg,
+    new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.45, depthWrite: false }));
+  edgeLines.renderOrder = 5;
+  earthGroup.add(edgeLines);
 }
 
 // ---------- 轨道环 ----------
@@ -278,9 +302,10 @@ function setHover(cell: Cell | null) {
   const hud = document.getElementById('hud-cell')!;
   if (!cell) { hud.classList.remove('show'); return; }
 
-  const poly = cell.polygon.map((p) => p.clone().normalize().multiplyScalar(R * 1.006));
+  const hr = R * (cell.terrain === 'mountain' ? MOUNTAIN_TOP + 0.005 : 1.006);
+  const poly = cell.polygon.map((p) => p.clone().normalize().multiplyScalar(hr));
   // 扇形三角化填充
-  const center = cell.center.clone().multiplyScalar(R * 1.006);
+  const center = cell.center.clone().multiplyScalar(hr);
   const pos: number[] = [];
   for (let i = 0; i < poly.length; i++) {
     const a = poly[i], b = poly[(i + 1) % poly.length];
