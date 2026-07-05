@@ -6,16 +6,19 @@
   <title>寰宇防线 // EARTH DEFENSE</title>
   <style>
     :root {
-      --c-cyan: #22d3ee;
-      --c-rose: #f43f5e;
-      --c-amber: #fbbf24;
-      --c-bg: #050810;
+      --cyan: #22d3ee;
+      --cyan-dim: rgba(34, 211, 238, 0.45);
+      --cyan-faint: rgba(34, 211, 238, 0.18);
+      --rose: #f43f5e;
+      --amber: #fbbf24;
+      --bg: #050810;
+      --panel-bg: rgba(7, 16, 28, 0.78);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--c-bg); }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
     body {
       font-family: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
-      color: var(--c-cyan);
+      color: var(--cyan);
       user-select: none;
     }
     #app { position: fixed; inset: 0; }
@@ -23,59 +26,210 @@
 
     .hud { position: fixed; z-index: 10; pointer-events: none; }
 
-    #hud-top {
-      top: 24px; left: 28px;
-      display: flex; flex-direction: column; gap: 6px;
+    /* ===== 切角面板通用样式 ===== */
+    .panel {
+      background: var(--panel-bg);
+      border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+      box-shadow: inset 0 0 18px rgba(34, 211, 238, 0.07);
+      padding: 10px 14px;
+      position: relative;
     }
-    #hud-title {
-      font-size: 20px; letter-spacing: 6px; font-weight: 600;
-      text-shadow: 0 0 12px rgba(34, 211, 238, 0.6);
+    .panel::before {
+      content: ""; position: absolute; left: 0; top: 0; width: 100%; height: 1px;
+      background: linear-gradient(90deg, var(--cyan), transparent 60%);
+      opacity: 0.5;
     }
-    #hud-title .en { color: rgba(34, 211, 238, 0.45); font-size: 12px; letter-spacing: 3px; }
-    #hud-sub {
-      font-size: 11px; letter-spacing: 2px; color: rgba(34, 211, 238, 0.55);
-      border-left: 2px solid rgba(34, 211, 238, 0.4);
-      padding-left: 8px;
+    .p-label {
+      font-size: 9px; letter-spacing: 3px; color: var(--cyan-dim); margin-bottom: 4px;
     }
-    #hud-sub .amber { color: var(--c-amber); }
 
+    /* ===== 顶部左：标题 ===== */
+    #hud-top { top: 22px; left: 26px; }
+    #hud-title {
+      font-size: 19px; letter-spacing: 6px; font-weight: 600;
+      text-shadow: 0 0 14px rgba(34, 211, 238, 0.65);
+    }
+    #hud-title .en { color: var(--cyan-dim); font-size: 11px; letter-spacing: 3px; }
+    #hud-sub {
+      margin-top: 5px; font-size: 10px; letter-spacing: 2px; color: var(--cyan-dim);
+      border-left: 2px solid var(--cyan-dim); padding-left: 8px;
+    }
+    #hud-sub .ok { color: var(--amber); }
+
+    /* ===== 顶部右：资源与波次 ===== */
+    #hud-res { top: 22px; right: 26px; display: flex; gap: 10px; }
+    .res-box { min-width: 128px; text-align: right; }
+    .res-val { font-size: 22px; letter-spacing: 1px; text-shadow: 0 0 10px currentColor; }
+    #energy-val { color: var(--amber); }
+    #wave-val { color: var(--cyan); }
+
+    /* ===== 右侧：城市状态 ===== */
+    #hud-cities { top: 118px; right: 26px; width: 190px; }
+    .city-row { display: flex; align-items: center; gap: 8px; margin: 7px 0; font-size: 10px; letter-spacing: 1px; }
+    .city-name { width: 62px; color: var(--cyan-dim); }
+    .city-row.dead .city-name { color: rgba(244, 63, 94, 0.5); text-decoration: line-through; }
+    .city-bar { flex: 1; height: 5px; background: rgba(34, 211, 238, 0.12); position: relative; overflow: hidden; }
+    .city-bar i {
+      position: absolute; inset: 0; transform-origin: left;
+      background: linear-gradient(90deg, var(--amber), #fde68a);
+      box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+      transition: transform 0.3s ease;
+    }
+    .city-row.hurt .city-bar i { background: linear-gradient(90deg, var(--rose), #fda4af); }
+
+    /* ===== 悬停信息（右下） ===== */
     #hud-cell {
-      right: 28px; top: 24px; text-align: right;
-      font-size: 11px; letter-spacing: 2px; line-height: 1.9;
-      color: rgba(34, 211, 238, 0.75);
+      right: 26px; bottom: 92px; text-align: right;
+      font-size: 10px; letter-spacing: 2px; line-height: 1.9; color: rgba(34, 211, 238, 0.7);
       opacity: 0; transition: opacity 0.2s ease;
     }
     #hud-cell.show { opacity: 1; }
-    #hud-cell .k { color: rgba(34, 211, 238, 0.4); }
-    #hud-cell .v-land { color: var(--c-amber); }
+    #hud-cell .k { color: var(--cyan-faint); }
+    #hud-cell .v-land { color: var(--amber); }
 
-    #hud-bottom {
-      bottom: 22px; left: 0; right: 0; text-align: center;
-      font-size: 10px; letter-spacing: 3px; color: rgba(34, 211, 238, 0.35);
+    /* ===== 底部中：建造栏 ===== */
+    #hud-build {
+      bottom: 24px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 12px; align-items: flex-end; pointer-events: auto;
+    }
+    .tower-card {
+      width: 118px; padding: 9px 12px; cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+    }
+    .tower-card:hover { transform: translateY(-2px); }
+    .tower-card.selected {
+      border-color: var(--amber);
+      box-shadow: inset 0 0 18px rgba(251, 191, 36, 0.12), 0 0 14px rgba(251, 191, 36, 0.25);
+    }
+    .tower-card.selected::before { background: linear-gradient(90deg, var(--amber), transparent 60%); }
+    .tower-card.poor { opacity: 0.45; cursor: not-allowed; }
+    .tc-icon { font-size: 17px; text-shadow: 0 0 10px var(--cyan); }
+    .tc-name { font-size: 11px; letter-spacing: 2px; margin-top: 3px; }
+    .tc-sub { font-size: 8px; letter-spacing: 2px; color: var(--cyan-dim); }
+    .tc-cost { margin-top: 5px; font-size: 11px; color: var(--amber); letter-spacing: 1px; }
+    .tc-key {
+      position: absolute; top: 5px; right: 8px; font-size: 9px; color: var(--cyan-dim);
+      border: 1px solid var(--cyan-faint); padding: 1px 4px;
+    }
+    #build-hint {
+      position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%);
+      font-size: 10px; letter-spacing: 3px; color: var(--amber);
+      text-shadow: 0 0 8px rgba(251, 191, 36, 0.5);
+      opacity: 0; transition: opacity 0.2s; pointer-events: none;
+    }
+    #build-hint.show { opacity: 1; }
+
+    /* ===== 中央横幅（波次警报） ===== */
+    #banner {
+      top: 20%; left: 50%; transform: translateX(-50%);
+      text-align: center; opacity: 0; pointer-events: none;
+      transition: opacity 0.35s ease;
+    }
+    #banner.show { opacity: 1; }
+    #banner .b-main {
+      font-size: 30px; letter-spacing: 14px; color: var(--rose);
+      text-shadow: 0 0 22px rgba(244, 63, 94, 0.8);
+      animation: flicker 1.4s infinite;
+    }
+    #banner .b-sub { margin-top: 8px; font-size: 11px; letter-spacing: 5px; color: rgba(244, 63, 94, 0.7); }
+    #banner.friendly .b-main { color: var(--cyan); text-shadow: 0 0 22px rgba(34, 211, 238, 0.8); animation: none; }
+    #banner.friendly .b-sub { color: var(--cyan-dim); }
+    @keyframes flicker {
+      0%, 100% { opacity: 1; } 88% { opacity: 1; } 90% { opacity: 0.55; }
+      92% { opacity: 1; } 95% { opacity: 0.7; } 97% { opacity: 1; }
     }
 
-    .corner { position: fixed; width: 26px; height: 26px; z-index: 10; pointer-events: none;
-      border-color: rgba(34, 211, 238, 0.35); border-style: solid; border-width: 0; }
-    #c-tl { top: 14px; left: 14px; border-top-width: 1px; border-left-width: 1px; }
-    #c-tr { top: 14px; right: 14px; border-top-width: 1px; border-right-width: 1px; }
-    #c-bl { bottom: 14px; left: 14px; border-bottom-width: 1px; border-left-width: 1px; }
-    #c-br { bottom: 14px; right: 14px; border-bottom-width: 1px; border-right-width: 1px; }
+    /* ===== 倒计时 ===== */
+    #countdown {
+      top: 13%; left: 50%; transform: translateX(-50%);
+      font-size: 12px; letter-spacing: 4px; color: var(--cyan-dim);
+      opacity: 0; transition: opacity 0.3s;
+    }
+    #countdown.show { opacity: 1; }
+    #countdown b { color: var(--amber); font-weight: 400; }
 
+    /* ===== 结局遮罩 ===== */
+    #overlay {
+      position: fixed; inset: 0; z-index: 20; display: none;
+      align-items: center; justify-content: center; flex-direction: column;
+      background: radial-gradient(ellipse at center, rgba(5, 8, 16, 0.55), rgba(5, 8, 16, 0.92));
+      pointer-events: auto;
+    }
+    #overlay.show { display: flex; }
+    #ov-title { font-size: 44px; letter-spacing: 18px; text-shadow: 0 0 30px currentColor; }
+    #overlay.win #ov-title { color: var(--cyan); }
+    #overlay.lose #ov-title { color: var(--rose); }
+    #ov-sub { margin-top: 14px; font-size: 12px; letter-spacing: 6px; color: var(--cyan-dim); }
+    #ov-btn {
+      margin-top: 40px; padding: 10px 38px; cursor: pointer;
+      font-family: inherit; font-size: 12px; letter-spacing: 6px;
+      color: var(--cyan); background: transparent; border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+      transition: all 0.2s;
+    }
+    #ov-btn:hover { background: rgba(34, 211, 238, 0.1); box-shadow: 0 0 18px rgba(34, 211, 238, 0.3); }
+
+    /* ===== 暂停指示 ===== */
+    #paused {
+      top: 50%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 16px; letter-spacing: 10px; color: var(--cyan);
+      text-shadow: 0 0 16px rgba(34, 211, 238, 0.7);
+      border: 1px solid var(--cyan-dim); padding: 12px 30px;
+      background: var(--panel-bg); display: none;
+    }
+    #paused.show { display: block; }
+
+    /* ===== 底部提示 ===== */
+    #hud-bottom {
+      bottom: 8px; left: 26px;
+      font-size: 9px; letter-spacing: 2px; color: rgba(34, 211, 238, 0.3);
+    }
+
+    /* ===== 装饰 ===== */
+    .corner { position: fixed; width: 26px; height: 26px; z-index: 10; pointer-events: none;
+      border-color: var(--cyan-dim); border-style: solid; border-width: 0; }
+    #c-tl { top: 12px; left: 12px; border-top-width: 1px; border-left-width: 1px; }
+    #c-tr { top: 12px; right: 12px; border-top-width: 1px; border-right-width: 1px; }
+    #c-bl { bottom: 12px; left: 12px; border-bottom-width: 1px; border-left-width: 1px; }
+    #c-br { bottom: 12px; right: 12px; border-bottom-width: 1px; border-right-width: 1px; }
     #scanline {
       position: fixed; inset: 0; z-index: 9; pointer-events: none;
-      background: repeating-linear-gradient(
-        to bottom, transparent 0px, transparent 3px, rgba(0, 0, 0, 0.12) 4px);
+      background: repeating-linear-gradient(to bottom, transparent 0px, transparent 3px, rgba(0, 0, 0, 0.12) 4px);
       mix-blend-mode: multiply;
+    }
+    /* 受击红闪 */
+    #dmg-flash {
+      position: fixed; inset: 0; z-index: 8; pointer-events: none;
+      background: radial-gradient(ellipse at center, transparent 55%, rgba(244, 63, 94, 0.35));
+      opacity: 0; transition: opacity 0.6s ease-out;
     }
   </style>
 </head>
 <body>
   <div id="app"></div>
   <div id="scanline"></div>
+  <div id="dmg-flash"></div>
 
   <div class="hud" id="hud-top">
     <div id="hud-title">寰宇防线 <span class="en">// EARTH DEFENSE</span></div>
-    <div id="hud-sub">M0 · 战术全息投影 <span class="amber">ONLINE</span></div>
+    <div id="hud-sub">轨道防御网 <span class="ok" id="status-text">ONLINE</span></div>
+  </div>
+
+  <div class="hud" id="hud-res">
+    <div class="panel res-box">
+      <div class="p-label">能源 ENERGY</div>
+      <div class="res-val" id="energy-val">0</div>
+    </div>
+    <div class="panel res-box">
+      <div class="p-label">波次 WAVE</div>
+      <div class="res-val" id="wave-val">—</div>
+    </div>
+  </div>
+
+  <div class="hud panel" id="hud-cities">
+    <div class="p-label">城市网络 CITY GRID</div>
+    <div id="city-list"></div>
   </div>
 
   <div class="hud" id="hud-cell">
@@ -83,7 +237,33 @@
     <div><span class="k">TERRAIN</span> <span id="cell-terrain">—</span></div>
   </div>
 
-  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · 悬停查看区块</div>
+  <div class="hud" id="hud-build">
+    <div class="panel tower-card" id="card-pulse">
+      <div class="tc-key">1</div>
+      <div class="tc-icon">▲</div>
+      <div class="tc-name">脉冲炮</div>
+      <div class="tc-sub">PULSE CANNON</div>
+      <div class="tc-cost">⚡ 100</div>
+    </div>
+  </div>
+  <div id="build-hint">部署模式 // 点击陆地格子建造 · 右键取消</div>
+
+  <div class="hud" id="countdown">敌方登陆舱进入轨道 <b id="cd-val">10</b>s</div>
+
+  <div class="hud" id="banner">
+    <div class="b-main" id="banner-main">WAVE 1</div>
+    <div class="b-sub" id="banner-sub">敌袭警报 // HOSTILE INBOUND</div>
+  </div>
+
+  <div id="paused">战术冻结 // PAUSED</div>
+
+  <div id="overlay">
+    <div id="ov-title">防线守住了</div>
+    <div id="ov-sub">EARTH DEFENSE GRID HOLDS</div>
+    <button id="ov-btn">重新部署 // RESTART</button>
+  </div>
+
+  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1] 建塔 · [空格] 暂停</div>
 
   <div class="corner" id="c-tl"></div>
   <div class="corner" id="c-tr"></div>

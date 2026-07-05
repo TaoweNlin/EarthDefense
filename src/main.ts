@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { buildGoldberg, type Cell } from './goldberg';
+import { Game, TOWER_RANGE_RAD } from './game';
 
 // ---------- 常量 ----------
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -283,11 +284,77 @@ function setHover(cell: Cell | null) {
   document.getElementById('cell-id')!.textContent =
     `#${String(cell.id).padStart(3, '0')}${cell.isPentagon ? ' ◆遗迹位' : ''}`;
   const tEl = document.getElementById('cell-terrain')!;
-  tEl.textContent = cell.terrain === 'land' ? '陆地 LAND' : '海洋 OCEAN';
+  const info = game.cellInfo(cell.id);
+  tEl.textContent = info === 'city' ? '城市 CITY'
+    : info === 'tower' ? '防御塔 TOWER'
+    : cell.terrain === 'land' ? '陆地 LAND' : '海洋 OCEAN';
   tEl.className = cell.terrain === 'land' ? 'v-land' : '';
 }
 
 // ---------- 交互：拖拽旋转（带惯性）、滚轮缩放、悬停拾取 ----------
+// ---------- 游戏逻辑 ----------
+const game = new Game(earthGroup, grid);
+// 调试钩子（控制台可手动推进/检查状态）
+(window as any).__game = game;
+(window as any).__grid = grid;
+
+// ---------- 建造模式 ----------
+let buildMode = false;
+const buildCard = document.getElementById('card-pulse')!;
+const buildHint = document.getElementById('build-hint')!;
+
+function setBuildMode(on: boolean) {
+  buildMode = on;
+  buildCard.classList.toggle('selected', on);
+  buildHint.classList.toggle('show', on);
+  rangePreview.visible = false;
+}
+buildCard.addEventListener('click', () => setBuildMode(!buildMode));
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Digit1') setBuildMode(!buildMode);
+  if (e.code === 'Escape') setBuildMode(false);
+  if (e.code === 'Space') { e.preventDefault(); setPaused(!paused); }
+});
+window.addEventListener('contextmenu', (e) => { e.preventDefault(); setBuildMode(false); });
+document.getElementById('ov-btn')!.addEventListener('click', () => location.reload());
+
+// 射程预览圈
+const rangePreview = new THREE.LineLoop(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.7, depthWrite: false }));
+rangePreview.renderOrder = 8;
+rangePreview.visible = false;
+earthGroup.add(rangePreview);
+
+function updateRangePreview(cell: Cell | null) {
+  if (!buildMode || !cell) { rangePreview.visible = false; return; }
+  const n = cell.center;
+  const ref = Math.abs(n.y) < 0.99 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const e1 = new THREE.Vector3().crossVectors(n, ref).normalize();
+  const e2 = new THREE.Vector3().crossVectors(n, e1).normalize();
+  const pts: THREE.Vector3[] = [];
+  const cr = Math.cos(TOWER_RANGE_RAD), sr = Math.sin(TOWER_RANGE_RAD);
+  for (let i = 0; i < 64; i++) {
+    const a = (i / 64) * Math.PI * 2;
+    pts.push(n.clone().multiplyScalar(cr)
+      .addScaledVector(e1, sr * Math.cos(a))
+      .addScaledVector(e2, sr * Math.sin(a))
+      .multiplyScalar(1.008));
+  }
+  rangePreview.geometry.dispose();
+  rangePreview.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+  (rangePreview.material as THREE.LineBasicMaterial).color.set(
+    game.canBuild(cell.id).ok ? '#22d3ee' : '#f43f5e');
+  rangePreview.visible = true;
+}
+
+// ---------- 暂停 ----------
+let paused = false;
+function setPaused(on: boolean) {
+  paused = on;
+  document.getElementById('paused')!.classList.toggle('show', on);
+}
+
 // 相机绕地球做轨道运动：拖拽改变经纬角，星空/轨道环随之产生视差
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -300,12 +367,25 @@ const PITCH_LIMIT = 1.45;
 let camDist = 3.15;
 let camDistTarget = 3.15;
 
+let downX = 0, downY = 0;
 renderer.domElement.addEventListener('pointerdown', (e) => {
   dragging = true;
   lastX = e.clientX; lastY = e.clientY;
+  downX = e.clientX; downY = e.clientY;
   velYaw = 0; velPitch = 0;
 });
-window.addEventListener('pointerup', () => (dragging = false));
+window.addEventListener('pointerup', (e) => {
+  dragging = false;
+  // 位移极小视为点击
+  if (e.button === 0 && Math.hypot(e.clientX - downX, e.clientY - downY) < 6) {
+    const cell = pickCell();
+    if (cell && buildMode) {
+      if (game.tryBuild(cell.id)) {
+        if (game.energy < 100) setBuildMode(false);
+      }
+    }
+  }
+});
 window.addEventListener('pointermove', (e) => {
   pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
@@ -399,7 +479,11 @@ function tick() {
   // 悬停高亮脉冲
   if (hoverLine) hoverLineMat.opacity = 0.75 + 0.25 * Math.sin(t * 5);
 
-  setHover(dragging ? null : pickCell());
+  const hovered = dragging ? null : pickCell();
+  setHover(hovered);
+  updateRangePreview(hovered);
+
+  game.update(paused ? 0 : dt);
 
   composer.render();
 }
