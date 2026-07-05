@@ -32,7 +32,8 @@ type Phase = 'prewave' | 'active' | 'won' | 'lost';
 
 interface City {
   cellId: number; hp: number; alive: boolean; name: string;
-  group: THREE.Group; core: THREE.Mesh; row: HTMLElement; bar: HTMLElement;
+  group: THREE.Group; buildings: THREE.Group; beam: THREE.Mesh; base: THREE.Mesh;
+  row: HTMLElement; bar: HTMLElement;
 }
 interface Tower {
   cellId: number; group: THREE.Group; ring: THREE.Mesh; cooldown: number;
@@ -99,20 +100,50 @@ export class Game {
     picked.forEach((cell, i) => {
       const group = new THREE.Group();
       const n = cell.center.clone();
-      group.position.copy(n.clone().multiplyScalar(1.005));
+      group.position.copy(n.clone().multiplyScalar(1.002));
       group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
 
-      const core = new THREE.Mesh(
-        new THREE.OctahedronGeometry(0.03),
-        new THREE.MeshBasicMaterial({ color: COL_AMBER, wireframe: true, transparent: true, opacity: 0.95 }));
-      core.position.y = 0.035;
-      group.add(core);
+      // --- 建筑群：一圈高低错落的发光棱柱 ---
+      const buildings = new THREE.Group();
+      const fillMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#241a06') });
+      const edgeMat = new THREE.LineBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.85 });
+      const bCount = 7;
+      for (let b = 0; b < bCount; b++) {
+        // 确定性布局：主塔居中，其余环绕
+        const isMain = b === 0;
+        const ang = (b / (bCount - 1)) * Math.PI * 2 + i * 1.3;
+        const dist = isMain ? 0 : 0.016 + 0.007 * ((b * 7 + i * 3) % 3);
+        const w = isMain ? 0.011 : 0.006 + 0.003 * ((b + i) % 2);
+        const h = isMain ? 0.055 : 0.018 + 0.011 * ((b * 5 + i) % 3);
+        const geo = new THREE.BoxGeometry(w, h, w);
+        const mesh = new THREE.Mesh(geo, fillMat);
+        mesh.position.set(Math.cos(ang) * dist, h / 2, Math.sin(ang) * dist);
+        buildings.add(mesh);
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat);
+        edges.position.copy(mesh.position);
+        buildings.add(edges);
+      }
+      group.add(buildings);
+
+      // --- 中央光柱：城市的生命信标 ---
+      const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.0035, 0.006, 0.14, 8, 1, true),
+        new THREE.MeshBasicMaterial({
+          color: COL_AMBER, transparent: true, opacity: 0.3,
+          blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+        }));
+      beam.position.y = 0.07;
+      beam.renderOrder = 8;
+      group.add(beam);
+
+      // --- 基座环 ---
       const base = new THREE.Mesh(
-        new THREE.RingGeometry(0.032, 0.04, 32),
-        new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false }));
+        new THREE.RingGeometry(0.034, 0.042, 6),  // 六边形环，呼应格子
+        new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false }));
       base.rotation.x = -Math.PI / 2;
       base.renderOrder = 6;
       group.add(base);
+
       this.root.add(group);
 
       const row = document.createElement('div');
@@ -123,7 +154,7 @@ export class Game {
       this.occupied.add(cell.id);
       this.cities.push({
         cellId: cell.id, hp: CITY_HP, alive: true, name: CITY_NAMES[i],
-        group, core, row, bar: row.querySelector('i')!,
+        group, buildings, beam, base, row, bar: row.querySelector('i')!,
       });
     });
   }
@@ -417,7 +448,16 @@ export class Game {
       city.hp = 0;
       city.alive = false;
       city.row.classList.add('dead');
-      (city.core.material as THREE.MeshBasicMaterial).color.set('#57343c');
+      // 城市熄灭：建筑边线转暗红、光柱关闭、基座变暗
+      city.buildings.traverse((o) => {
+        const mat = (o as THREE.Mesh | THREE.LineSegments).material as THREE.MeshBasicMaterial | undefined;
+        if (!mat) return;
+        if (o instanceof THREE.LineSegments) { mat.color.set('#6b2a35'); mat.opacity = 0.5; }
+        else if (o instanceof THREE.Mesh) mat.color.set('#140a08');
+      });
+      city.beam.visible = false;
+      (city.base.material as THREE.MeshBasicMaterial).color.set('#6b2a35');
+      (city.base.material as THREE.MeshBasicMaterial).opacity = 0.3;
       this.spawnRing(city.group.position.clone(), COL_ROSE, 0.09);
       if (!this.cities.some((c) => c.alive)) this.endGame(false);
     }
@@ -490,13 +530,14 @@ export class Game {
   }
 
   private animateIdle(dt: number) {
-    // 城市呼吸 + 登陆标记脉冲
-    for (const c of this.cities) {
-      if (!c.alive) continue;
-      c.core.rotation.y += dt * 0.8;
-      const s = 1 + 0.12 * Math.sin(this.time * 2.2);
-      c.core.scale.setScalar(s);
-    }
+    // 城市信标呼吸 + 基座缓转 + 登陆标记脉冲
+    this.cities.forEach((c, i) => {
+      if (!c.alive) return;
+      const k = 0.5 + 0.5 * Math.sin(this.time * 1.8 + i * 1.2);
+      (c.beam.material as THREE.MeshBasicMaterial).opacity = 0.16 + k * 0.28;
+      c.beam.scale.set(1 + k * 0.3, 1, 1 + k * 0.3);
+      c.base.rotation.z += dt * 0.35;
+    });
     this.markers.forEach((m, i) => {
       const k = 0.5 + 0.5 * Math.sin(this.time * 4 + i);
       m.children.forEach((ch) => {
