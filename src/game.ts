@@ -49,7 +49,15 @@ const GROUND_DEFS: Record<string, GroundDef> = {
   swarmling: { hp: 16,  speed: 0.09,  armor: 0, reward: 3,  size: 0.012 }, // 裂变产物
 };
 
+// 全局刷怪倍率：拉长每艘运输舰的倾泻时间，堆战场密度
+const HORDE_MUL = 1.5;
+
 // 空中单位（立体防御的主角，只能被防空火力击落）
+const WING_HP = 14;            // 飞行蜂群：极脆、极多，给防空当割草靶
+const WING_REWARD = 4;
+const WING_SPEED = 0.055;      // 角速度 rad/s，缓慢推进
+const WING_ALT = 1.1;          // 巡航高度
+const WING_IMPACT_DAMAGE = 2;
 const DIVER_HP = 60;
 const DIVER_REWARD = 22;
 const DIVER_IMPACT_DAMAGE = 20;   // 撞击城市伤害
@@ -126,7 +134,7 @@ interface Satellite {
   e1: THREE.Vector3; e2: THREE.Vector3; angle: number; cooldown: number;
 }
 
-type OrbitalKind = 'transport' | 'jammer' | 'boss' | 'diver' | 'gunship';
+type OrbitalKind = 'transport' | 'jammer' | 'boss' | 'diver' | 'gunship' | 'wing';
 interface Orbital {
   kind: OrbitalKind; hp: number; maxHp: number; alive: boolean;
   group: THREE.Group; pos: THREE.Vector3;
@@ -267,17 +275,37 @@ export class Game {
     return picked;
   }
 
+  /** 在候选集中找最接近指定方向的未选格 */
+  private snapToCell(dir: THREE.Vector3, pool: Cell[], exclude: Cell[]): Cell {
+    let best = pool[0], bestA = Infinity;
+    for (const c of pool) {
+      if (exclude.includes(c)) continue;
+      const a = c.center.angleTo(dir);
+      if (a < bestA) { bestA = a; best = c; }
+    }
+    return best;
+  }
+
   private spawnCities() {
     const land = this.grid.cells.filter((c) => c.terrain === 'land' && !c.isPentagon);
     let picked: Cell[];
 
     switch (this.cfg.cityLayout) {
       case 'equator': {
-        // 赤道城市链：城市贴着赤道带分布
+        // 赤道城市链：沿赤道按经度等分排布，规则可读
         let belt = land.filter((c) => Math.abs(c.center.y) < 0.3);
-        if (belt.length < this.cfg.cities) belt = land.filter((c) => Math.abs(c.center.y) < 0.5);
+        if (belt.length < this.cfg.cities * 3) belt = land.filter((c) => Math.abs(c.center.y) < 0.5);
         if (belt.length < this.cfg.cities) belt = land;
-        picked = this.farthestPick(belt, this.cfg.cities);
+        const anchor = belt[Math.floor(this.rand() * belt.length)];
+        picked = [anchor];
+        for (let i = 1; i < this.cfg.cities; i++) {
+          const dir = anchor.center.clone()
+            .applyAxisAngle(new THREE.Vector3(0, 1, 0), (i / this.cfg.cities) * Math.PI * 2);
+          // 吸附时保持城市间最小间距，避免挤在同一块陆地
+          const spaced = belt.filter((c) =>
+            picked.every((p) => c.center.angleTo(p.center) > 1.1));
+          picked.push(this.snapToCell(dir, spaced.length ? spaced : belt, picked));
+        }
         break;
       }
       case 'capital': {
@@ -289,13 +317,28 @@ export class Game {
         picked = [anchor, ...this.farthestPick(around, this.cfg.cities - 1)];
         break;
       }
-      default: {
-        // cluster / global：聚集度控制
+      case 'cluster': {
+        // 防区聚集：主城 + 周边固定角距、等分方位的卫星城，布局规则
         const anchor = land[Math.floor(this.rand() * land.length)];
-        const maxAngle = 0.55 + (1 - this.cfg.cityCluster) * (Math.PI - 0.55);
-        let candidates = land.filter((c) => c.center.angleTo(anchor.center) <= maxAngle);
-        if (candidates.length < this.cfg.cities) candidates = land;
-        picked = this.farthestPick(candidates, this.cfg.cities, anchor);
+        picked = [anchor];
+        const n = anchor.center.clone();
+        const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+        const e1 = new THREE.Vector3().crossVectors(n, ref).normalize();
+        const e2 = new THREE.Vector3().crossVectors(n, e1).normalize();
+        const ringDist = 0.5;
+        for (let i = 1; i < this.cfg.cities; i++) {
+          const b = ((i - 1) / Math.max(1, this.cfg.cities - 1)) * Math.PI * 2 + 0.4;
+          const dir = n.clone().multiplyScalar(Math.cos(ringDist))
+            .addScaledVector(e1, Math.sin(ringDist) * Math.cos(b))
+            .addScaledVector(e2, Math.sin(ringDist) * Math.sin(b));
+          picked.push(this.snapToCell(dir, land, picked));
+        }
+        break;
+      }
+      default: {
+        // global：全球均匀铺开
+        const anchor = land[Math.floor(this.rand() * land.length)];
+        picked = this.farthestPick(land, this.cfg.cities, anchor);
       }
     }
     this.cityCenter = picked.reduce((v, c) => v.add(c.center), new THREE.Vector3()).normalize();
@@ -834,13 +877,18 @@ export class Game {
     const cfg = this.cfg.waves[this.launched];
     cfg.drops.forEach((drop, i) => {
       const p = this.pending[i];
-      this.spawnTransport(p.cellId, drop, i * 2.2, p.marker, false, { u: p.u, trail: p.trail });
+      const cargo = { type: drop.type, n: Math.round(drop.n * HORDE_MUL) };
+      this.spawnTransport(p.cellId, cargo, i * 2.2, p.marker, false, { u: p.u, trail: p.trail });
     });
     this.markers = [];
     this.pending = [];
     for (let j = 0; j < (cfg.jammers ?? 0); j++) this.spawnJammer();
     for (let d = 0; d < (cfg.divers ?? 0); d++) this.spawnDiver(d);
     for (let gs = 0; gs < (cfg.gunships ?? 0); gs++) this.spawnGunship();
+    if (cfg.wings) {
+      this.spawnWings(cfg.wings);
+      this.banner('飞行蜂群来袭', 'WING SWARM INBOUND // 防空火力自由射击', false, 3000);
+    }
     if (cfg.gunships) this.banner('炮舰压顶', 'GUNSHIP ON STATION // 仅防空可拦截', false, 3000);
     if (cfg.boss) this.spawnBoss();
 
@@ -1035,6 +1083,45 @@ export class Game {
     this.orbitals.push(o);
   }
 
+  /** 飞行蜂群：从走廊外侧成编队低空飞向城市，防空的割草靶 */
+  private spawnWings(count: number) {
+    const targets = this.cities.filter((c) => c.alive);
+    if (!targets.length || !this.laneCells.length) return;
+    const lane = this.grid.cells[this.laneCells[Math.floor(this.rand() * this.laneCells.length)]];
+    // 目标：距走廊最近的存活城市
+    let city = targets[0];
+    for (const c of targets) {
+      if (this.grid.cells[c.cellId].center.angleTo(lane.center)
+        < this.grid.cells[city.cellId].center.angleTo(lane.center)) city = c;
+    }
+    const cityDir = this.grid.cells[city.cellId].center.clone();
+    // 出发点：沿"城市→走廊"方向再向外延伸，编队从走廊外侧压进来
+    const startBase = cityDir.clone().lerp(lane.center, 1.7).normalize();
+    const ref = Math.abs(startBase.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const e1 = new THREE.Vector3().crossVectors(startBase, ref).normalize();
+    const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
+
+    for (let i = 0; i < count; i++) {
+      const o = this.baseOrbital('wing', WING_HP);
+      o.landCell = city.cellId;
+      // 编队横向抖动 + 纵向错峰
+      const spread = (this.rand() - 0.5) * 0.22;
+      const spread2 = (this.rand() - 0.5) * 0.22;
+      o.basisN = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
+      o.basisU = cityDir.clone();
+      o.orbitAngle = o.basisN.angleTo(o.basisU); // 总航程角
+      o.theta = -i * 0.055;                      // 进度（负值 = 延迟出场）
+
+      const body = new THREE.Mesh(
+        new THREE.TetrahedronGeometry(0.013),
+        new THREE.MeshBasicMaterial({ color: COL_ROSE, wireframe: true, transparent: true, opacity: 0.95 }));
+      o.group.add(body);
+      o.group.visible = false;
+      this.root.add(o.group);
+      this.orbitals.push(o);
+    }
+  }
+
   /** 炮舰：飞抵城市上空悬停，持续轰炸，只能被防空火力击落 */
   private spawnGunship() {
     const targets = this.cities.filter((c) => c.alive);
@@ -1105,6 +1192,23 @@ export class Game {
             this.spawnUnit(o.landCell, o.cargo.type);
           }
           if (o.cargo.n === 0) this.finishTransport(o, false);
+        }
+      } else if (o.kind === 'wing') {
+        o.theta += (dt * WING_SPEED) / Math.max(o.orbitAngle, 0.2);
+        if (o.theta < 0) continue; // 编队错峰
+        o.group.visible = true;
+        const k = Math.min(1, o.theta);
+        const alt = WING_ALT + 0.008 * Math.sin(this.time * 3 + o.landCell + o.orbitAngle * 37);
+        o.group.position.copy(o.basisN.clone().lerp(o.basisU, k).normalize().multiplyScalar(alt));
+        o.group.rotation.x += dt * 2.6;
+        o.group.rotation.y += dt * 3.4;
+        if (k >= 1) {
+          // 抵达城市上空：自杀式冲撞
+          o.phase = 'done';
+          o.alive = false;
+          this.hitCity(o.landCell, WING_IMPACT_DAMAGE, false);
+          this.spawnFlash(o.group.position.clone(), COL_ROSE, 0.012, 0.2);
+          this.root.remove(o.group);
         }
       } else if (o.kind === 'diver') {
         if (o.phase === 'orbit') {
@@ -1231,13 +1335,21 @@ export class Game {
       this.stats.intercepted++;
       sfx.play('intercept', 120);
       this.finishTransport(o, true);
+    } else if (o.kind === 'wing') {
+      // 蜂群算击杀（割草），不算拦截
+      o.alive = false;
+      this.stats.kills++;
+      this.energy += WING_REWARD;
+      sfx.play('explosion', 130);
+      this.spawnRing(o.pos.clone(), COL_CYAN, 0.03);
+      this.root.remove(o.group);
     } else {
       o.alive = false;
       this.stats.intercepted++;
       sfx.play('intercept', 120);
       const rewards: Record<OrbitalKind, number> = {
         transport: TRANSPORT_REWARD, jammer: JAMMER_REWARD, boss: BOSS_REWARD,
-        diver: DIVER_REWARD, gunship: GUNSHIP_REWARD,
+        diver: DIVER_REWARD, gunship: GUNSHIP_REWARD, wing: WING_REWARD,
       };
       this.energy += rewards[o.kind];
       this.spawnRing(o.pos.clone(), COL_CYAN, o.kind === 'boss' ? 0.14 : 0.08);
