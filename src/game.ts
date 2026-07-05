@@ -22,12 +22,13 @@ export interface TowerDef {
 }
 
 export const TOWER_DEFS: TowerDef[] = [
-  { key: 'pulse',   name: '脉冲炮',   sub: 'PULSE',   icon: '▲', cost: 100, kind: 'ground',  range: 0.36, damage: 26, cooldown: 0.85, desc: '基础对地单体' },
-  { key: 'tesla',   name: '磁暴塔',   sub: 'TESLA',   icon: '◈', cost: 140, kind: 'ground',  range: 0.30, damage: 0,  cooldown: 0,    desc: '范围减速 40%' },
-  { key: 'laser',   name: '轨道激光', sub: 'O-LASER', icon: '║', cost: 170, kind: 'air',     range: 0.60, damage: 30, cooldown: 0,    desc: '对空持续射线·锁定增伤' },
-  { key: 'missile', name: '破片导弹', sub: 'FRAG-M',  icon: '✦', cost: 190, kind: 'air',     range: 0.55, damage: 80, cooldown: 4.0,  desc: '对空范围爆发' },
-  { key: 'radar',   name: '雷达站',   sub: 'RADAR',   icon: '◍', cost: 120, kind: 'support', range: 0.40, damage: 0,  cooldown: 0,    desc: '射程内塔 +25% 射速' },
-  { key: 'prism',   name: '汇聚棱镜', sub: 'PRISM',   icon: '◆', cost: 220, kind: 'ground',  range: 0.42, damage: 42, cooldown: 1.5,  desc: '相邻每塔 +45% 伤害' },
+  { key: 'pulse',     name: '脉冲炮',   sub: 'PULSE',   icon: '▲', cost: 100, kind: 'ground',  range: 0.36, damage: 26, cooldown: 0.85, desc: '基础对地单体' },
+  { key: 'tesla',     name: '磁暴塔',   sub: 'TESLA',   icon: '◈', cost: 140, kind: 'ground',  range: 0.30, damage: 0,  cooldown: 0,    desc: '范围减速 40%' },
+  { key: 'laser',     name: '轨道激光', sub: 'O-LASER', icon: '║', cost: 170, kind: 'air',     range: 0.60, damage: 30, cooldown: 0,    desc: '对空持续射线·锁定增伤' },
+  { key: 'missile',   name: '破片导弹', sub: 'FRAG-M',  icon: '✦', cost: 190, kind: 'air',     range: 0.55, damage: 80, cooldown: 4.0,  desc: '对空范围爆发' },
+  { key: 'radar',     name: '雷达站',   sub: 'RADAR',   icon: '◍', cost: 120, kind: 'support', range: 0.40, damage: 0,  cooldown: 0,    desc: '射程内塔 +25% 射速' },
+  { key: 'prism',     name: '汇聚棱镜', sub: 'PRISM',   icon: '◆', cost: 220, kind: 'ground',  range: 0.42, damage: 42, cooldown: 1.5,  desc: '相邻每塔 +45% 伤害' },
+  { key: 'satellite', name: '防御卫星', sub: 'SAT-NET', icon: '✧', cost: 260, kind: 'air',     range: 0.55, damage: 16, cooldown: 0.55, desc: '部署轨道卫星环球巡航' },
 ];
 
 const OCEAN_PLATFORM_COST = 60;   // 海上浮动平台附加费
@@ -40,10 +41,15 @@ const MAX_LEVEL = 3;
 
 interface GroundDef { hp: number; speed: number; armor: number; reward: number; size: number }
 const GROUND_DEFS: Record<string, GroundDef> = {
-  swarm:   { hp: 55,  speed: 0.085, armor: 0, reward: 16, size: 0.022 },
-  runner:  { hp: 42,  speed: 0.155, armor: 0, reward: 15, size: 0.018 },
-  armored: { hp: 170, speed: 0.055, armor: 8, reward: 32, size: 0.03 },
+  swarm:     { hp: 55,  speed: 0.085, armor: 0, reward: 16, size: 0.022 },
+  runner:    { hp: 42,  speed: 0.155, armor: 0, reward: 15, size: 0.018 },
+  armored:   { hp: 170, speed: 0.055, armor: 8, reward: 32, size: 0.03 },
+  splitter:  { hp: 75,  speed: 0.08,  armor: 0, reward: 18, size: 0.024 },  // 死后裂变
+  swarmling: { hp: 25,  speed: 0.115, armor: 0, reward: 6,  size: 0.013 }, // 裂变产物
+  burrower:  { hp: 95,  speed: 0.07,  armor: 0, reward: 26, size: 0.024 }, // 周期性遁地免疫攻击
 };
+const BURROW_SURFACE = 2.8;  // 地表可被攻击时长
+const BURROW_UNDER = 1.8;    // 遁地免疫时长
 
 const TRANSPORT_HP = 130;
 const TRANSPORT_REWARD = 45;   // 在轨击落 = 整船歼灭，重赏
@@ -86,7 +92,7 @@ type Phase = 'idle' | 'prewave' | 'active' | 'won' | 'lost';
 // ========== 实体 ==========
 
 interface City {
-  cellId: number; hp: number; alive: boolean; name: string;
+  cellId: number; hp: number; maxHp: number; alive: boolean; name: string; capital: boolean;
   group: THREE.Group; buildings: THREE.Group; beam: THREE.Mesh; base: THREE.Mesh;
   row: HTMLElement; bar: HTMLElement;
 }
@@ -105,6 +111,12 @@ interface Unit {
   type: string; def: GroundDef;
   mesh: THREE.Mesh; path: number[]; seg: number; t: number;
   hp: number; alive: boolean; pos: THREE.Vector3; slowUntilFrame: boolean;
+  burrowT: number; burrowed: boolean;
+}
+
+interface Satellite {
+  towerCell: number; group: THREE.Group; line: THREE.Line;
+  e1: THREE.Vector3; e2: THREE.Vector3; angle: number; cooldown: number;
 }
 
 type OrbitalKind = 'transport' | 'jammer' | 'boss';
@@ -133,12 +145,16 @@ interface Projectile {
 export class Game {
   phase: Phase = 'idle';
   energy: number;
-  waveIdx = 0;
-  private prewaveT = 0;
+  /** 已发起的波数（连续进攻：下一波不等上一波清完） */
+  launched = 0;
+  private nextWaveT = 0;
   private time = 0;
   private battleTime = 0;
   stats: GameStats = { kills: 0, intercepted: 0, leaked: 0, citiesLost: 0, duration: 0, stars: 0 };
   private cityCenter = new THREE.Vector3(0, 1, 0);
+  private laneCells: number[] = [];
+  private laneMarkers: THREE.Group[] = [];
+  satellites: Satellite[] = [];
 
   cities: City[] = [];
   towers: Tower[] = [];
@@ -171,22 +187,25 @@ export class Game {
   start() {
     if (this.phase !== 'idle') return;
     this.phase = 'prewave';
-    this.prewaveT = this.cfg.waves[0].prewave;
+    this.nextWaveT = this.cfg.waves[0].prewave;
+    this.initLanes();
+    this.prepareLandings();
     this.showCountdown(true);
+    this.banner(this.cfg.name, `任务目标 // ${this.cfg.objective}`, true, 4200);
   }
 
-  // ============ 城市 ============
-
-  private spawnCities() {
-    const land = this.grid.cells.filter((c) => c.terrain === 'land' && !c.isPentagon);
-    // 防区聚集度：cluster=1 城市挤在一块大陆，=0 全球铺开
-    const anchor = land[Math.floor(this.rand() * land.length)];
-    const maxAngle = 0.55 + (1 - this.cfg.cityCluster) * (Math.PI - 0.55);
-    let candidates = land.filter((c) => c.center.angleTo(anchor.center) <= maxAngle);
-    if (candidates.length < this.cfg.cities) candidates = land;
-
-    const picked: Cell[] = [anchor];
-    while (picked.length < this.cfg.cities) {
+  /** 固定进攻走廊：整关的登陆都发生在这些走廊附近，开局即可见 */
+  private initLanes() {
+    const dist = this.bfsFromCities();
+    let candidates = this.grid.cells.filter((c) =>
+      c.terrain !== 'ocean' && !this.occupied.has(c.id) &&
+      dist[c.id] >= 2 && dist[c.id] <= 6 &&
+      c.center.angleTo(this.cityCenter) <= this.cfg.landingSpread);
+    if (candidates.length < this.cfg.lanes) {
+      candidates = this.grid.cells.filter((c) => c.terrain !== 'ocean' && dist[c.id] >= 2);
+    }
+    const picked: Cell[] = [candidates[Math.floor(this.rand() * candidates.length)]];
+    while (picked.length < this.cfg.lanes) {
       let best: Cell | null = null, bestD = -1;
       for (const c of candidates) {
         if (picked.includes(c)) continue;
@@ -197,15 +216,91 @@ export class Game {
       if (!best) break;
       picked.push(best);
     }
+    this.laneCells = picked.map((c) => c.id);
+
+    // 走廊常驻标记：格子轮廓 + 内环，暗玫红，与临战登陆标记区分
+    for (const c of picked) {
+      const g = new THREE.Group();
+      const lift = c.terrain === 'mountain' ? 1.024 : 1.005;
+      const poly = c.polygon.map((p) => p.clone().normalize().multiplyScalar(lift));
+      const outline = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(poly),
+        new THREE.LineBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.4, depthWrite: false }));
+      outline.renderOrder = 7;
+      g.add(outline);
+      const n = c.center.clone();
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.01, 0.017, 24),
+        new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }));
+      ring.position.copy(n.clone().multiplyScalar(lift));
+      ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+      ring.renderOrder = 7;
+      g.add(ring);
+      this.root.add(g);
+      this.laneMarkers.push(g);
+    }
+  }
+
+  // ============ 城市 ============
+
+  /** 在候选集内做最远点采样 */
+  private farthestPick(candidates: Cell[], count: number, seedCell?: Cell): Cell[] {
+    const picked: Cell[] = [seedCell ?? candidates[Math.floor(this.rand() * candidates.length)]];
+    while (picked.length < count) {
+      let best: Cell | null = null, bestD = -1;
+      for (const c of candidates) {
+        if (picked.includes(c)) continue;
+        let d = Infinity;
+        for (const p of picked) d = Math.min(d, c.center.angleTo(p.center));
+        if (d > bestD) { bestD = d; best = c; }
+      }
+      if (!best) break;
+      picked.push(best);
+    }
+    return picked;
+  }
+
+  private spawnCities() {
+    const land = this.grid.cells.filter((c) => c.terrain === 'land' && !c.isPentagon);
+    let picked: Cell[];
+
+    switch (this.cfg.cityLayout) {
+      case 'equator': {
+        // 赤道城市链：城市贴着赤道带分布
+        let belt = land.filter((c) => Math.abs(c.center.y) < 0.3);
+        if (belt.length < this.cfg.cities) belt = land.filter((c) => Math.abs(c.center.y) < 0.5);
+        if (belt.length < this.cfg.cities) belt = land;
+        picked = this.farthestPick(belt, this.cfg.cities);
+        break;
+      }
+      case 'capital': {
+        // 中心城场景：首都 + 环绕卫星城
+        const anchor = land[Math.floor(this.rand() * land.length)];
+        let around = land.filter((c) => c !== anchor && c.center.angleTo(anchor.center) <= 0.9);
+        if (around.length < this.cfg.cities - 1) around = land.filter((c) => c !== anchor);
+        picked = [anchor, ...this.farthestPick(around, this.cfg.cities - 1)];
+        break;
+      }
+      default: {
+        // cluster / global：聚集度控制
+        const anchor = land[Math.floor(this.rand() * land.length)];
+        const maxAngle = 0.55 + (1 - this.cfg.cityCluster) * (Math.PI - 0.55);
+        let candidates = land.filter((c) => c.center.angleTo(anchor.center) <= maxAngle);
+        if (candidates.length < this.cfg.cities) candidates = land;
+        picked = this.farthestPick(candidates, this.cfg.cities, anchor);
+      }
+    }
     this.cityCenter = picked.reduce((v, c) => v.add(c.center), new THREE.Vector3()).normalize();
 
     const listEl = document.getElementById('city-list')!;
     listEl.innerHTML = '';
     picked.forEach((cell, i) => {
+      const capital = this.cfg.cityLayout === 'capital' && i === 0;
       const group = new THREE.Group();
       const n = cell.center.clone();
       group.position.copy(n.clone().multiplyScalar(1.002));
       group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), n);
+      if (capital) group.scale.setScalar(1.5); // 首都体量更大
 
       const buildings = new THREE.Group();
       const fillMat = new THREE.MeshBasicMaterial({ color: new THREE.Color('#241a06') });
@@ -246,14 +341,16 @@ export class Game {
 
       this.root.add(group);
 
+      const name = capital ? '★中枢 CORE' : CITY_NAMES[i];
+      const maxHp = capital ? 200 : CITY_HP;
       const row = document.createElement('div');
       row.className = 'city-row';
-      row.innerHTML = `<span class="city-name">${CITY_NAMES[i]}</span><span class="city-bar"><i></i></span>`;
+      row.innerHTML = `<span class="city-name">${name}</span><span class="city-bar"><i></i></span>`;
       listEl.appendChild(row);
 
       this.occupied.add(cell.id);
       this.cities.push({
-        cellId: cell.id, hp: CITY_HP, alive: true, name: CITY_NAMES[i],
+        cellId: cell.id, hp: maxHp, maxHp, alive: true, name, capital,
         group, buildings, beam, base, row, bar: row.querySelector('i')!,
       });
     });
@@ -314,9 +411,68 @@ export class Game {
       edges: group.userData.edges as THREE.LineSegments[],
       cooldown: 0, lockTarget: null, lockT: 0, beam: null, jammed: false,
     });
+    if (def.key === 'satellite') this.spawnSatellite(cellId);
     sfx.play('build');
     this.updateHud();
     return true;
+  }
+
+  /** 防御卫星：地面站发射一颗沿青色轨道环球巡航的攻击卫星 */
+  private spawnSatellite(cellId: number) {
+    const n = this.grid.cells[cellId].center.clone();
+    const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const u = new THREE.Vector3().crossVectors(n, ref).normalize()
+      .applyAxisAngle(n, this.rand() * Math.PI * 2);
+    const axis = new THREE.Vector3().crossVectors(n, u).normalize();
+    const line = this.makeOrbitLine(axis, 1.42, 0.35, COL_CYAN);
+
+    const group = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.02),
+      new THREE.MeshBasicMaterial({ color: COL_CYAN, wireframe: true, transparent: true, opacity: 0.95 }));
+    group.add(body);
+    for (const side of [-1, 1]) {
+      const panel = new THREE.Mesh(
+        new THREE.BoxGeometry(0.032, 0.002, 0.014),
+        new THREE.MeshBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.55 }));
+      panel.position.x = side * 0.03;
+      group.add(panel);
+    }
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.007, 8, 8),
+      new THREE.MeshBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    group.add(core);
+    this.root.add(group);
+
+    this.satellites.push({ towerCell: cellId, group, line, e1: n, e2: u, angle: 0, cooldown: 0 });
+  }
+
+  private updateSatellites(dt: number) {
+    for (const s of this.satellites) {
+      s.angle += dt * 0.42;
+      const pos = s.e1.clone().multiplyScalar(Math.cos(s.angle))
+        .addScaledVector(s.e2, Math.sin(s.angle)).multiplyScalar(1.42);
+      s.group.position.copy(pos);
+      s.group.rotation.y += dt * 1.5;
+
+      s.cooldown -= dt;
+      if (s.cooldown > 0) continue;
+      const tower = this.towerAt(s.towerCell);
+      if (!tower) continue;
+      let target: Orbital | null = null;
+      let bestD = Infinity;
+      for (const o of this.orbitals) {
+        if (!o.alive || o.phase === 'done' || !o.group.visible) continue;
+        const d = o.pos.distanceTo(pos);
+        if (d < 0.6 && d < bestD) { bestD = d; target = o; }
+      }
+      if (!target) continue;
+      s.cooldown = tower.def.cooldown;
+      this.fireLine(pos.clone(), target.pos.clone(), 0.12);
+      this.spawnFlash(target.pos.clone(), COL_CYAN, 0.008, 0.12);
+      sfx.play('shoot', 90);
+      this.damageOrbital(target, this.towerDamage(tower));
+    }
   }
 
   upgradeCost(t: Tower): number {
@@ -349,6 +505,15 @@ export class Game {
     if (idx < 0) return;
     const t = this.towers[idx];
     sfx.play('sell');
+    // 卫星站出售时回收在轨卫星
+    if (t.def.key === 'satellite') {
+      const si = this.satellites.findIndex((s) => s.towerCell === cellId);
+      if (si >= 0) {
+        this.root.remove(this.satellites[si].group);
+        this.root.remove(this.satellites[si].line);
+        this.satellites.splice(si, 1);
+      }
+    }
     this.energy += Math.round(t.invested * SELL_REFUND);
     if (t.beam) this.root.remove(t.beam);
     this.root.remove(t.group);
@@ -503,6 +668,19 @@ export class Game {
         ring = mkRing(0.018, 0.006);
         break;
       }
+      case 'satellite': {
+        // 卫星地面站：发射台 + 上仰天线 + 通讯环
+        addPart(new THREE.BoxGeometry(0.03, 0.01, 0.03), 0.006);
+        addPart(new THREE.CylinderGeometry(0.003, 0.006, 0.035, 6), 0.026);
+        const dish = addPart(new THREE.ConeGeometry(0.014, 0.008, 12, 1, true), 0.048);
+        dish.rotation.x = 0.5;
+        ring = mkRing(0.019, 0.004, 0.0026);
+        const uplink = new THREE.Mesh(new THREE.SphereGeometry(0.005, 8, 8), glowM.clone());
+        uplink.position.y = 0.052;
+        group.add(uplink);
+        bob.push({ obj: uplink, base: 0.052, amp: 0.005, freq: 2.6 });
+        break;
+      }
       case 'prism': {
         // 汇聚棱镜：反重力悬浮晶体 + 两颗环绕碎晶 + 地面聚能环
         const geo = new THREE.OctahedronGeometry(0.018);
@@ -545,36 +723,29 @@ export class Game {
     // 汲能词条被动产能
     for (const t of this.towers) if (t.perk?.key === 'siphon') this.energy += 1.5 * dt;
 
-    if (this.phase === 'prewave') {
-      this.prewaveT -= dt;
-      document.getElementById('cd-val')!.textContent = Math.ceil(this.prewaveT).toString();
-      if (this.prewaveT <= 0) this.startWave();
+    // 连续进攻调度：倒计时到点就发起下一波，不等上一波清完
+    if (this.launched < this.cfg.waves.length) {
+      this.nextWaveT -= dt;
+      document.getElementById('cd-val')!.textContent = Math.max(0, Math.ceil(this.nextWaveT)).toString();
+      if (this.nextWaveT <= 0) this.launchWave();
     }
 
     this.updateOrbitals(dt);
     this.updateUnits(dt);
     this.updateTowers(dt);
+    this.updateSatellites(dt);
     this.updateProjectiles(dt);
     this.updateFx(dt);
     this.animateIdle(dt);
     this.updateHud();
 
-    if (this.phase === 'active' && this.waveCleared()) {
-      this.waveIdx++;
-      if (this.waveIdx >= this.cfg.waves.length) {
-        this.endGame(true);
-      } else {
-        this.phase = 'prewave';
-        this.prewaveT = this.cfg.waves[this.waveIdx].prewave;
-        this.setWaveLabel();
-        this.showCountdown(true);
-        this.banner(`WAVE ${this.waveIdx + 1}`, '敌方登陆舱接近中 // INBOUND', false, 2600);
-        this.prepareLandings();
-      }
+    // 终局：全部波次已发起且战场清空
+    if (this.launched >= this.cfg.waves.length && this.fieldClear()) {
+      this.endGame(true);
     }
   }
 
-  private waveCleared(): boolean {
+  private fieldClear(): boolean {
     return this.orbitals.every((o) => !o.alive || o.phase === 'done')
       && this.orbitals.every((o) => o.kind === 'transport' || !o.alive)
       && this.units.every((u) => !u.alive);
@@ -583,21 +754,16 @@ export class Game {
   // ============ 波次与登陆 ============
 
   private prepareLandings() {
-    const cfg = this.cfg.waves[this.waveIdx];
-    const dist = this.bfsFromCities();
-    // 登陆点约束：距城市 2~5 格，且在本关允许的登陆扇区内（区域→全球曲线）
-    let candidates = this.grid.cells.filter((c) =>
-      c.terrain !== 'ocean' && !this.occupied.has(c.id) &&
-      dist[c.id] >= 2 && dist[c.id] <= 5 &&
-      c.center.angleTo(this.cityCenter) <= this.cfg.landingSpread);
-    if (!candidates.length) {
-      candidates = this.grid.cells.filter((c) =>
-        c.terrain !== 'ocean' && !this.occupied.has(c.id) && dist[c.id] >= 2 && dist[c.id] <= 5);
-    }
-    const pool = candidates.length ? candidates : this.grid.cells.filter((c) => c.terrain !== 'ocean');
+    const cfg = this.cfg.waves[this.launched];
+    if (!cfg) return;
     this.pending = [];
     for (let i = 0; i < cfg.drops.length; i++) {
-      const pick = pool[Math.floor(this.rand() * pool.length)];
+      // 登陆点固定在进攻走廊内：走廊格本身或其相邻格
+      const laneId = this.laneCells[(this.launched + i) % Math.max(1, this.laneCells.length)];
+      const lane = this.grid.cells[laneId];
+      const options = [lane, ...lane.neighbors.map((id) => this.grid.cells[id])]
+        .filter((c) => c.terrain !== 'ocean' && !this.occupied.has(c.id));
+      const pick = options.length ? options[Math.floor(this.rand() * options.length)] : lane;
       const n = pick.center.clone();
       // 预定轨道平面：预警阶段即确定并显示航迹
       const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
@@ -651,23 +817,32 @@ export class Game {
     return g;
   }
 
-  private startWave() {
+  private launchWave() {
     this.phase = 'active';
-    this.showCountdown(false);
-    this.banner(`WAVE ${this.waveIdx + 1}`, '敌袭 // HOSTILE INBOUND', false, 2600);
     if (!this.pending.length) this.prepareLandings();
     sfx.play('alarm');
+    this.banner(`WAVE ${this.launched + 1}`, '敌袭 // HOSTILE INBOUND', false, 2600);
 
-    const cfg = this.cfg.waves[this.waveIdx];
+    const cfg = this.cfg.waves[this.launched];
     cfg.drops.forEach((drop, i) => {
       const p = this.pending[i];
       this.spawnTransport(p.cellId, drop, i * 2.2, p.marker, false, { u: p.u, trail: p.trail });
     });
     this.markers = [];
     this.pending = [];
-
     for (let j = 0; j < (cfg.jammers ?? 0); j++) this.spawnJammer();
     if (cfg.boss) this.spawnBoss();
+
+    this.launched++;
+    this.setWaveLabel();
+    if (this.launched < this.cfg.waves.length) {
+      // 立即预告下一波：倒计时 + 登陆标记 + 航迹线与当前战斗并存
+      this.nextWaveT = this.cfg.waves[this.launched].prewave;
+      this.prepareLandings();
+      this.showCountdown(true);
+    } else {
+      this.showCountdown(false);
+    }
   }
 
   private baseOrbital(kind: OrbitalKind, hp: number): Orbital {
@@ -734,7 +909,7 @@ export class Game {
   }
 
   /** 环绕型轨道单位的轨道线：实际飞行圆轨道的虚线投影 */
-  private makeOrbitLine(axis: THREE.Vector3, radius: number, opacity: number): THREE.Line {
+  private makeOrbitLine(axis: THREE.Vector3, radius: number, opacity: number, color: THREE.Color = COL_ROSE): THREE.Line {
     const ref = Math.abs(axis.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
     const e1 = new THREE.Vector3().crossVectors(axis, ref).normalize();
     const e2 = new THREE.Vector3().crossVectors(axis, e1).normalize();
@@ -747,7 +922,7 @@ export class Game {
     const line = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(pts),
       new THREE.LineDashedMaterial({
-        color: COL_ROSE, transparent: true, opacity,
+        color, transparent: true, opacity,
         dashSize: 0.035, gapSize: 0.025, depthWrite: false,
       }));
     line.computeLineDistances();
@@ -913,16 +1088,22 @@ export class Game {
     let geo: THREE.BufferGeometry;
     if (type === 'armored') geo = new THREE.OctahedronGeometry(def.size);
     else if (type === 'runner') geo = new THREE.ConeGeometry(def.size * 0.7, def.size * 2.2, 4);
+    else if (type === 'splitter') geo = new THREE.IcosahedronGeometry(def.size, 0);
+    else if (type === 'burrower') { geo = new THREE.OctahedronGeometry(def.size); geo.scale(1, 0.55, 1); }
     else geo = new THREE.TetrahedronGeometry(def.size);
     const mat = new THREE.MeshBasicMaterial({
-      color: type === 'armored' ? new THREE.Color('#c22343') : COL_ROSE,
+      color: type === 'armored' ? new THREE.Color('#c22343')
+        : type === 'burrower' ? new THREE.Color('#a33052') : COL_ROSE,
       wireframe: true, transparent: true, opacity: 0.95,
     });
     const mesh = new THREE.Mesh(geo, mat);
     const pos = this.grid.cells[fromCell].center.clone().multiplyScalar(1.02);
     mesh.position.copy(pos);
     this.root.add(mesh);
-    this.units.push({ type, def, mesh, path, seg: 0, t: 0, hp: def.hp, alive: true, pos: pos.clone(), slowUntilFrame: false });
+    this.units.push({
+      type, def, mesh, path, seg: 0, t: 0, hp: def.hp, alive: true, pos: pos.clone(),
+      slowUntilFrame: false, burrowT: 0, burrowed: false,
+    });
   }
 
   private updateUnits(dt: number) {
@@ -957,7 +1138,19 @@ export class Game {
           else { this.killUnit(u, false); continue; }
         }
       }
-      u.pos.copy(from).lerp(to, u.t).normalize().multiplyScalar(1.02);
+      // 掘地者：地表/遁地循环，遁地期间免疫攻击
+      if (u.type === 'burrower') {
+        u.burrowT += dt;
+        const cycle = u.burrowT % (BURROW_SURFACE + BURROW_UNDER);
+        const wasBurrowed = u.burrowed;
+        u.burrowed = cycle > BURROW_SURFACE;
+        if (u.burrowed !== wasBurrowed) {
+          this.spawnRing(u.pos.clone(), COL_ROSE, 0.03);
+        }
+        (u.mesh.material as THREE.MeshBasicMaterial).opacity = u.burrowed ? 0.18 : 0.95;
+      }
+      const lift = u.burrowed ? 1.004 : 1.02;
+      u.pos.copy(from).lerp(to, u.t).normalize().multiplyScalar(lift);
       u.mesh.position.copy(u.pos);
       u.mesh.rotation.x += dt * 3.1;
       u.mesh.rotation.y += dt * 2.3;
@@ -973,6 +1166,13 @@ export class Game {
       this.energy += u.def.reward;
       this.stats.kills++;
       sfx.play('explosion', 90);
+      // 裂变体：死后分裂出两只小蜂群继续扑城
+      if (u.type === 'splitter') {
+        const cell = u.path[Math.min(u.seg, u.path.length - 1)];
+        this.spawnUnit(cell, 'swarmling');
+        this.spawnUnit(cell, 'swarmling');
+        this.spawnRing(u.pos.clone(), COL_ROSE, 0.06);
+      }
     }
   }
 
@@ -1003,7 +1203,8 @@ export class Game {
       (city.base.material as THREE.MeshBasicMaterial).color.set('#6b2a35');
       (city.base.material as THREE.MeshBasicMaterial).opacity = 0.3;
       this.spawnRing(city.group.position.clone(), COL_ROSE, 0.09);
-      if (!this.cities.some((c) => c.alive)) this.endGame(false);
+      // 首都陷落 = 直接战败；否则全灭才输
+      if (city.capital || !this.cities.some((c) => c.alive)) this.endGame(false);
     }
   }
 
@@ -1067,7 +1268,7 @@ export class Game {
           const orbPos = towerN.clone().multiplyScalar(towerH + 0.072);
           let arcs = 0;
           for (const u of this.units) {
-            if (!u.alive || arcs >= 2) continue;
+            if (!u.alive || u.burrowed || arcs >= 2) continue;
             if (towerN.angleTo(u.pos) > this.towerRange(tw)) continue;
             this.spawnArc(orbPos, u.pos.clone());
             arcs++;
@@ -1078,6 +1279,7 @@ export class Game {
         continue;
       }
       if (tw.def.key === 'radar') continue; // 增益塔不攻击
+      if (tw.def.key === 'satellite') continue; // 攻击由在轨卫星执行
 
       tw.cooldown -= dt * rateMul;
       if (tw.cooldown > 0) continue;
@@ -1100,11 +1302,11 @@ export class Game {
         continue;
       }
 
-      // pulse / prism：对地
+      // pulse / prism：对地（遁地中的掘地者无法锁定）
       let target: Unit | null = null;
       let bestProgress = -1;
       for (const u of this.units) {
-        if (!u.alive) continue;
+        if (!u.alive || u.burrowed) continue;
         if (towerN.angleTo(u.pos) > range) continue;
         const progress = u.seg + u.t;
         if (progress > bestProgress) { bestProgress = progress; target = u; }
@@ -1428,7 +1630,7 @@ export class Game {
   private updateHud() {
     document.getElementById('energy-val')!.textContent = Math.floor(this.energy).toString();
     for (const c of this.cities) {
-      c.bar.style.transform = `scaleX(${c.hp / CITY_HP})`;
+      c.bar.style.transform = `scaleX(${c.hp / c.maxHp})`;
     }
     document.querySelectorAll<HTMLElement>('.tower-card').forEach((card) => {
       if (card.dataset.locked) return; // 未解锁的卡保持置灰
@@ -1438,12 +1640,12 @@ export class Game {
   }
 
   private setWaveLabel() {
-    document.getElementById('wave-val')!.textContent = `${this.waveIdx + 1}/${this.cfg.waves.length}`;
+    document.getElementById('wave-val')!.textContent =
+      `${Math.min(this.launched + 1, this.cfg.waves.length)}/${this.cfg.waves.length}`;
   }
 
   private showCountdown(show: boolean) {
     document.getElementById('countdown')!.classList.toggle('show', show);
-    if (show && this.waveIdx === 0 && !this.pending.length) this.prepareLandings();
   }
 
   private banner(main: string, sub: string, friendly: boolean, ms: number) {
@@ -1462,7 +1664,8 @@ export class Game {
     // 评星：3★ 城市无损且总血量≥80%；2★ 至多损失 1 城；1★ 惨胜
     this.stats.duration = Math.round(this.battleTime);
     if (win) {
-      const totalHp = this.cities.reduce((s, c) => s + c.hp, 0) / (this.cities.length * CITY_HP);
+      const totalHp = this.cities.reduce((s, c) => s + c.hp, 0)
+        / this.cities.reduce((s, c) => s + c.maxHp, 0);
       this.stats.stars = this.stats.citiesLost === 0 && totalHp >= 0.8 ? 3
         : this.stats.citiesLost <= 1 ? 2 : 1;
     } else {

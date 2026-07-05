@@ -491,6 +491,22 @@ const buildHint = document.getElementById('build-hint')!;
   });
 }
 
+// 建造失败原因提示：短暂变红显示原因后恢复
+let hintResetTimer: ReturnType<typeof setTimeout> | null = null;
+function flashBuildHint(reason: string) {
+  sfx.play('deny');
+  buildHint.textContent = `⚠ ${reason}`;
+  buildHint.style.color = '#f43f5e';
+  buildHint.classList.add('show');
+  if (hintResetTimer) clearTimeout(hintResetTimer);
+  hintResetTimer = setTimeout(() => {
+    buildHint.style.color = '';
+    const def = TOWER_DEFS.find((d) => d.key === selectedDef);
+    if (def) buildHint.textContent = `部署 ${def.name} // ${def.desc} · 右键取消`;
+    else buildHint.classList.remove('show');
+  }, 1400);
+}
+
 function selectDef(key: string | null) {
   selectedDef = key;
   document.querySelectorAll<HTMLElement>('.tower-card').forEach((c) =>
@@ -503,7 +519,7 @@ function selectDef(key: string | null) {
 }
 
 window.addEventListener('keydown', (e) => {
-  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].indexOf(e.code);
+  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7'].indexOf(e.code);
   if (idx >= 0 && idx < TOWER_DEFS.length && level.towers.includes(TOWER_DEFS[idx].key)) {
     selectDef(selectedDef === TOWER_DEFS[idx].key ? null : TOWER_DEFS[idx].key);
   }
@@ -704,7 +720,9 @@ window.addEventListener('pointerup', (e) => {
     const cell = pickCell();
     if (!cell) return;
     if (selectedDef) {
-      game.tryBuild(cell.id, selectedDef);
+      const check = game.canBuild(cell.id, selectedDef);
+      if (check.ok) game.tryBuild(cell.id, selectedDef);
+      else flashBuildHint(check.reason ?? '无法建造');
     } else if (game.towerAt(cell.id)) {
       selectTowerCell(cell.id);
     } else {
