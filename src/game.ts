@@ -40,12 +40,13 @@ const MAX_LEVEL = 3;
 // ========== 敌人定义 ==========
 
 interface GroundDef { hp: number; speed: number; armor: number; reward: number; size: number }
+// 割草导向：单体更慢更脆、奖励减半，靠数量堆战场密度
 const GROUND_DEFS: Record<string, GroundDef> = {
-  swarm:     { hp: 55,  speed: 0.085, armor: 0, reward: 16, size: 0.022 },
-  runner:    { hp: 42,  speed: 0.155, armor: 0, reward: 15, size: 0.018 },
-  armored:   { hp: 170, speed: 0.055, armor: 8, reward: 32, size: 0.03 },
-  splitter:  { hp: 75,  speed: 0.08,  armor: 0, reward: 18, size: 0.024 },  // 死后裂变
-  swarmling: { hp: 25,  speed: 0.115, armor: 0, reward: 6,  size: 0.013 }, // 裂变产物
+  swarm:     { hp: 38,  speed: 0.058, armor: 0, reward: 8,  size: 0.02 },
+  runner:    { hp: 30,  speed: 0.115, armor: 0, reward: 7,  size: 0.017 },
+  armored:   { hp: 150, speed: 0.04,  armor: 8, reward: 20, size: 0.03 },
+  splitter:  { hp: 55,  speed: 0.06,  armor: 0, reward: 9,  size: 0.023 },  // 死后裂变
+  swarmling: { hp: 16,  speed: 0.09,  armor: 0, reward: 3,  size: 0.012 }, // 裂变产物
 };
 
 // 空中单位（立体防御的主角，只能被防空火力击落）
@@ -73,7 +74,7 @@ const BOSS_DROP_INTERVAL = 11;
 
 const CITY_HP = 100;
 const CITY_INCOME = 1.6;
-const CITY_HIT_DAMAGE = 15;
+const CITY_HIT_DAMAGE = 8; // 割草量级下单只渗透伤害调低
 const CITY_NAMES = ['NOVA-1', 'KIRIN-2', 'AURUM-3', 'TERRA-4', 'ZENIT-5', 'HALO-6'];
 
 // 遗迹词条（建在五边形格上随机获得）
@@ -1100,7 +1101,7 @@ export class Game {
           o.group.rotation.y += dt * 1.2;
           if (o.deployTimer <= 0 && o.cargo.n > 0) {
             o.cargo.n--;
-            o.deployTimer = 0.65;
+            o.deployTimer = 0.32; // 快速倾泻，成群涌出
             this.spawnUnit(o.landCell, o.cargo.type);
           }
           if (o.cargo.n === 0) this.finishTransport(o, false);
@@ -1469,12 +1470,20 @@ export class Game {
       const dmg = Math.max(1, this.towerDamage(tw) - target.def.armor);
       target.hp -= dmg;
       if (tw.def.key === 'prism') {
-        // 汇聚棱镜：粗光束 + 双端爆闪
+        // 汇聚棱镜：粗光束 + 双端爆闪 + 溅射（割草核心）
         const from = towerN.clone().multiplyScalar(towerH + 0.055);
         this.spawnBeam(from, target.pos.clone(), 0.006, COL_CYAN);
         this.spawnFlash(from, COL_AMBER, 0.012, 0.2);
         this.spawnFlash(target.pos.clone(), COL_CYAN, 0.016, 0.25);
         sfx.play('prism', 180);
+        // 命中点范围溅射：清一片
+        for (const u2 of this.units) {
+          if (!u2.alive || u2 === target) continue;
+          if (u2.pos.distanceTo(target.pos) < 0.075) {
+            u2.hp -= Math.max(1, dmg * 0.6 - u2.def.armor);
+            if (u2.hp <= 0) this.killUnit(u2, true);
+          }
+        }
       } else {
         // 脉冲炮：射线 + 枪口焰 + 命中闪
         const from = towerN.clone().multiplyScalar(towerH + 0.062);
