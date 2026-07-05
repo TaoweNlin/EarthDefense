@@ -140,7 +140,8 @@ export class Game {
   private occupied = new Set<number>();
   private root = new THREE.Group();
   private markers: THREE.Group[] = [];
-  private pendingLandCells: number[] = [];
+  /** 波前预告：登陆点 + 预定轨道平面 + 已显示的航迹线 */
+  private pending: { cellId: number; marker: THREE.Group; u: THREE.Vector3; trail: THREE.Line }[] = [];
 
   private laserMat = new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
 
@@ -539,12 +540,40 @@ export class Game {
       c.terrain !== 'ocean' && !this.occupied.has(c.id) &&
       dist[c.id] >= 2 && dist[c.id] <= 5);
     const pool = candidates.length ? candidates : this.grid.cells.filter((c) => c.terrain !== 'ocean');
-    this.pendingLandCells = [];
+    this.pending = [];
     for (let i = 0; i < cfg.drops.length; i++) {
       const pick = pool[Math.floor(this.rand() * pool.length)];
-      this.pendingLandCells.push(pick.id);
-      this.markers.push(this.spawnLandingMarker(pick.id));
+      const n = pick.center.clone();
+      // 预定轨道平面：预警阶段即确定并显示航迹
+      const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      const u = new THREE.Vector3().crossVectors(n, ref).normalize()
+        .applyAxisAngle(n, this.rand() * Math.PI * 2);
+      const marker = this.spawnLandingMarker(pick.id);
+      this.markers.push(marker);
+      this.pending.push({ cellId: pick.id, marker, u, trail: this.makeTransportTrail(n, u) });
     }
+  }
+
+  /** 运输舰航迹线：环绕段 + 降落段 */
+  private makeTransportTrail(n: THREE.Vector3, u: THREE.Vector3): THREE.Line {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 96; i++) {
+      const th = -3.1 + (i / 96) * 3.1;
+      const r = this.orbitRadius(th);
+      pts.push(n.clone().multiplyScalar(Math.cos(th))
+        .addScaledVector(u, Math.sin(th)).multiplyScalar(r));
+    }
+    pts.push(n.clone().multiplyScalar(1.03));
+    const trail = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineDashedMaterial({
+        color: COL_ROSE, transparent: true, opacity: 0.45,
+        dashSize: 0.03, gapSize: 0.022, depthWrite: false,
+      }));
+    trail.computeLineDistances();
+    trail.renderOrder = 8;
+    this.root.add(trail);
+    return trail;
   }
 
   private spawnLandingMarker(cellId: number): THREE.Group {
@@ -571,14 +600,15 @@ export class Game {
     this.phase = 'active';
     this.showCountdown(false);
     this.banner(`WAVE ${this.waveIdx + 1}`, '敌袭 // HOSTILE INBOUND', false, 2600);
-    if (!this.pendingLandCells.length) this.prepareLandings();
+    if (!this.pending.length) this.prepareLandings();
 
     const cfg = WAVES[this.waveIdx];
     cfg.drops.forEach((drop, i) => {
-      this.spawnTransport(this.pendingLandCells[i], drop, i * 2.2, this.markers[i] ?? null);
+      const p = this.pending[i];
+      this.spawnTransport(p.cellId, drop, i * 2.2, p.marker, false, { u: p.u, trail: p.trail });
     });
     this.markers = [];
-    this.pendingLandCells = [];
+    this.pending = [];
 
     for (let j = 0; j < (cfg.jammers ?? 0); j++) this.spawnJammer();
     if (cfg.boss) this.spawnBoss();
@@ -596,10 +626,10 @@ export class Game {
     };
   }
 
-  private spawnTransport(landCell: number, cargo: { type: string; n: number }, delay: number, marker: THREE.Group | null, skipOrbit = false) {
+  private spawnTransport(landCell: number, cargo: { type: string; n: number }, delay: number, marker: THREE.Group | null, skipOrbit = false, pre?: { u: THREE.Vector3; trail: THREE.Line }) {
     const n = this.grid.cells[landCell].center.clone();
     const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-    const u = new THREE.Vector3().crossVectors(n, ref).normalize()
+    const u = pre?.u ?? new THREE.Vector3().crossVectors(n, ref).normalize()
       .applyAxisAngle(n, this.rand() * Math.PI * 2);
 
     const o = this.baseOrbital('transport', TRANSPORT_HP);
@@ -619,29 +649,24 @@ export class Game {
     o.group.visible = skipOrbit;
     this.root.add(o.group);
 
-    // 轨迹线
-    const trailPts: THREE.Vector3[] = [];
-    if (!skipOrbit) {
-      for (let i = 0; i <= 96; i++) {
-        const th = -3.1 + (i / 96) * 3.1;
-        const r = this.orbitRadius(th);
-        trailPts.push(n.clone().multiplyScalar(Math.cos(th))
-          .addScaledVector(u, Math.sin(th)).multiplyScalar(r));
-      }
+    // 轨迹线：预警阶段已创建的直接沿用；投放舱走短降落线
+    if (pre) {
+      o.trail = pre.trail;
+    } else if (!skipOrbit) {
+      o.trail = this.makeTransportTrail(n, u);
     } else {
-      trailPts.push(n.clone().multiplyScalar(1.25));
+      const trail = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          n.clone().multiplyScalar(1.25), n.clone().multiplyScalar(1.03)]),
+        new THREE.LineDashedMaterial({
+          color: COL_ROSE, transparent: true, opacity: 0.45,
+          dashSize: 0.03, gapSize: 0.022, depthWrite: false,
+        }));
+      trail.computeLineDistances();
+      trail.renderOrder = 8;
+      this.root.add(trail);
+      o.trail = trail;
     }
-    trailPts.push(n.clone().multiplyScalar(1.03));
-    const trail = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints(trailPts),
-      new THREE.LineDashedMaterial({
-        color: COL_ROSE, transparent: true, opacity: 0.45,
-        dashSize: 0.03, gapSize: 0.022, depthWrite: false,
-      }));
-    trail.computeLineDistances();
-    trail.renderOrder = 8;
-    this.root.add(trail);
-    o.trail = trail;
 
     if (skipOrbit) {
       o.phase = 'descend';
@@ -1344,7 +1369,7 @@ export class Game {
 
   private showCountdown(show: boolean) {
     document.getElementById('countdown')!.classList.toggle('show', show);
-    if (show && this.waveIdx === 0 && !this.pendingLandCells.length) this.prepareLandings();
+    if (show && this.waveIdx === 0 && !this.pending.length) this.prepareLandings();
   }
 
   private banner(main: string, sub: string, friendly: boolean, ms: number) {
