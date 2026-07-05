@@ -389,6 +389,16 @@ document.getElementById('ov-menu')!.addEventListener('click', () => {
   sfx.play('click'); setSession(level.id, false); location.reload();
 });
 
+// ---------- 教学（第 1 关，仅一次） ----------
+let tutorialStep = -1;
+let tutorialTimer = 0;
+const TUTORIAL_STEPS = [
+  '拖拽旋转地球，滚轮缩放视角',
+  '按 [1] 选中脉冲炮，点击大陆格子部署防线',
+  '玫红虚线是敌舰来袭航线，红圈是登陆点——把炮塔架在登陆点通往城市的路上',
+  '敌人会沿地面走向城市，塔会自动开火。[空格] 可随时暂停布防',
+];
+
 // ---------- 主菜单 ----------
 {
   const menu = document.getElementById('menu')!;
@@ -445,15 +455,6 @@ document.getElementById('ov-menu')!.addEventListener('click', () => {
   }
 }
 
-// ---------- 教学（第 1 关，仅一次） ----------
-let tutorialStep = -1;
-let tutorialTimer = 0;
-const TUTORIAL_STEPS = [
-  '拖拽旋转地球，滚轮缩放视角',
-  '按 [1] 选中脉冲炮，点击大陆格子部署防线',
-  '玫红虚线是敌舰来袭航线，红圈是登陆点——把炮塔架在登陆点通往城市的路上',
-  '敌人会沿地面走向城市，塔会自动开火。[空格] 可随时暂停布防',
-];
 function startBattle() {
   game.start();
   if (level.id === 1 && !progress.tutorialDone) {
