@@ -3,7 +3,15 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { buildGoldberg, type Cell } from './goldberg';
-import { Game, TOWER_DEFS } from './game';
+import { Game, TOWER_DEFS, type GameStats } from './game';
+import { LEVELS, loadProgress, saveProgress, getSession, setSession } from './levels';
+import { sfx } from './sound';
+
+// ---------- 关卡会话 ----------
+const progress = loadProgress();
+const session = getSession();
+const levelId = Math.min(Math.max(1, session.level), progress.unlocked, LEVELS.length);
+const level = LEVELS[levelId - 1];
 
 // ---------- 常量 ----------
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -116,8 +124,8 @@ earthGroup.add(earthMesh);
   earthGroup.add(atmo);
 }
 
-// ---------- Goldberg 网格 ----------
-const grid = buildGoldberg(8, 20260705);
+// ---------- Goldberg 网格（行星布局由关卡种子决定） ----------
+const grid = buildGoldberg(8, level.seed);
 
 function lineSegments(points: THREE.Vector3[], radius: number, color: THREE.Color, opacity: number): THREE.LineSegments {
   const pos = new Float32Array(points.length * 3);
@@ -309,10 +317,151 @@ function setHover(cell: Cell | null) {
 
 // ---------- 交互：拖拽旋转（带惯性）、滚轮缩放、悬停拾取 ----------
 // ---------- 游戏逻辑 ----------
-const game = new Game(earthGroup, grid);
+const game = new Game(earthGroup, grid, level, onGameEnd);
 // 调试钩子（控制台可手动推进/检查状态）
 (window as any).__game = game;
 (window as any).__grid = grid;
+
+// 关卡名显示在副标题
+document.getElementById('hud-sub')!.innerHTML =
+  `第 ${level.id} 关 · ${level.name} ${level.sub} <span class="ok" id="status-text">ONLINE</span>`;
+
+// ---------- 结算 ----------
+function onGameEnd(win: boolean, stats: GameStats) {
+  if (win) {
+    progress.stars[level.id] = Math.max(progress.stars[level.id] ?? 0, stats.stars);
+    progress.unlocked = Math.max(progress.unlocked, Math.min(level.id + 1, LEVELS.length));
+    saveProgress(progress);
+  }
+  const ov = document.getElementById('overlay')!;
+  ov.classList.add('show', win ? 'win' : 'lose');
+  ov.classList.remove(win ? 'lose' : 'win');
+  document.getElementById('ov-title')!.textContent = win
+    ? (level.id === LEVELS.length ? '地球安全了' : '防线守住了') : '防线崩溃';
+  document.getElementById('ov-sub')!.textContent = win
+    ? (level.id === LEVELS.length ? 'CAMPAIGN COMPLETE // HUMANITY ENDURES' : 'EARTH DEFENSE GRID HOLDS')
+    : 'ORBITAL DEFENSE GRID LOST';
+  document.getElementById('ov-stars')!.textContent = win
+    ? '★'.repeat(stats.stars) + '☆'.repeat(3 - stats.stars) : '';
+  const mm = Math.floor(stats.duration / 60), ss = stats.duration % 60;
+  document.getElementById('ov-stats')!.innerHTML = `
+    <span>地面击杀</span><b>${stats.kills}</b>
+    <span>在轨拦截</span><b>${stats.intercepted}</b>
+    <span>敌军渗透</span><b>${stats.leaked}</b>
+    <span>城市损失</span><b>${stats.citiesLost}</b>
+    <span>作战时长</span><b>${mm}:${String(ss).padStart(2, '0')}</b>`;
+  const nextBtn = document.getElementById('ov-next') as HTMLButtonElement;
+  nextBtn.style.display = win && level.id < LEVELS.length ? '' : 'none';
+}
+document.getElementById('ov-retry')!.addEventListener('click', () => {
+  sfx.play('click'); setSession(level.id, true); location.reload();
+});
+document.getElementById('ov-next')!.addEventListener('click', () => {
+  sfx.play('click'); setSession(level.id + 1, true); location.reload();
+});
+document.getElementById('ov-menu')!.addEventListener('click', () => {
+  sfx.play('click'); setSession(level.id, false); location.reload();
+});
+
+// ---------- 主菜单 ----------
+{
+  const menu = document.getElementById('menu')!;
+  const gridEl = document.getElementById('level-grid')!;
+  const flavorEl = document.getElementById('menu-flavor')!;
+  for (const lv of LEVELS) {
+    const locked = lv.id > progress.unlocked;
+    const stars = progress.stars[lv.id] ?? 0;
+    const card = document.createElement('div');
+    card.className = 'lv-card' + (locked ? ' locked' : '');
+    card.innerHTML = `
+      <div class="lv-num">MISSION ${String(lv.id).padStart(2, '0')}${locked ? ' 🔒' : ''}</div>
+      <div class="lv-name">${lv.name}</div>
+      <div class="lv-stars">${stars ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : locked ? '' : '未通关'}</div>`;
+    card.addEventListener('mouseenter', () => { if (!locked) flavorEl.textContent = lv.flavor; });
+    card.addEventListener('click', () => {
+      if (locked) { sfx.play('deny'); return; }
+      sfx.play('click');
+      setSession(lv.id, true);
+      location.reload();
+    });
+    gridEl.appendChild(card);
+  }
+  document.getElementById('menu-start')!.addEventListener('click', () => {
+    sfx.play('click');
+    if (levelId === progress.unlocked && !session.autostart) {
+      // 直接在当前已加载的行星上开战
+      menu.classList.remove('show');
+      startBattle();
+    } else {
+      setSession(progress.unlocked, true);
+      location.reload();
+    }
+  });
+  if (session.autostart) {
+    setSession(levelId, false); // 消费一次性自动开始标记
+    startBattle();
+  } else {
+    menu.classList.add('show');
+    flavorEl.textContent = level.flavor;
+  }
+}
+
+// ---------- 教学（第 1 关，仅一次） ----------
+let tutorialStep = -1;
+let tutorialTimer = 0;
+const TUTORIAL_STEPS = [
+  '拖拽旋转地球，滚轮缩放视角',
+  '按 [1] 选中脉冲炮，点击大陆格子部署防线',
+  '玫红虚线是敌舰来袭航线，红圈是登陆点——把炮塔架在登陆点通往城市的路上',
+  '敌人会沿地面走向城市，塔会自动开火。[空格] 可随时暂停布防',
+];
+function startBattle() {
+  game.start();
+  if (level.id === 1 && !progress.tutorialDone) {
+    tutorialStep = 0;
+    tutorialTimer = 0;
+    showTutorial(TUTORIAL_STEPS[0]);
+  }
+}
+function showTutorial(text: string | null) {
+  const el = document.getElementById('tutorial')!;
+  if (text) { el.textContent = text; el.classList.add('show'); }
+  else el.classList.remove('show');
+}
+function updateTutorial(dt: number) {
+  if (tutorialStep < 0) return;
+  tutorialTimer += dt;
+  let advance = false;
+  if (tutorialStep === 0 && tutorialTimer > 5) advance = true;
+  if (tutorialStep === 1 && game.towers.length > 0) advance = true;
+  if (tutorialStep === 2 && (tutorialTimer > 9 || game.phase === 'active')) advance = true;
+  if (tutorialStep === 3 && tutorialTimer > 8) advance = true;
+  if (!advance) return;
+  tutorialStep++;
+  tutorialTimer = 0;
+  if (tutorialStep >= TUTORIAL_STEPS.length) {
+    tutorialStep = -1;
+    showTutorial(null);
+    progress.tutorialDone = true;
+    saveProgress(progress);
+  } else {
+    showTutorial(TUTORIAL_STEPS[tutorialStep]);
+  }
+}
+
+// ---------- 静音 ----------
+{
+  const btn = document.getElementById('mute-btn')!;
+  const sync = () => {
+    btn.textContent = sfx.muted ? '✕' : '♪';
+    btn.classList.toggle('muted', sfx.muted);
+  };
+  btn.addEventListener('click', () => { sfx.toggleMute(); sync(); });
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'KeyM') { sfx.toggleMute(); sync(); }
+  });
+  sync();
+}
 
 // ---------- 建造模式（6 塔卡片） ----------
 let selectedDef: string | null = null;
@@ -322,16 +471,22 @@ const buildHint = document.getElementById('build-hint')!;
 {
   const bar = document.getElementById('hud-build')!;
   TOWER_DEFS.forEach((def, i) => {
+    const unlocked = level.towers.includes(def.key);
     const card = document.createElement('div');
-    card.className = 'panel tower-card';
+    card.className = 'panel tower-card' + (unlocked ? '' : ' poor');
     card.dataset.key = def.key;
+    card.dataset.locked = unlocked ? '' : '1';
     card.innerHTML = `
-      <div class="tc-key">${i + 1}</div>
+      <div class="tc-key">${unlocked ? i + 1 : '🔒'}</div>
       <div class="tc-icon">${def.icon}</div>
       <div class="tc-name">${def.name}</div>
-      <div class="tc-sub">${def.sub}</div>
+      <div class="tc-sub">${unlocked ? def.sub : 'LOCKED'}</div>
       <div class="tc-cost">⚡ ${def.cost}</div>`;
-    card.addEventListener('click', () => selectDef(selectedDef === def.key ? null : def.key));
+    card.addEventListener('click', () => {
+      if (!unlocked) { sfx.play('deny'); return; }
+      sfx.play('click');
+      selectDef(selectedDef === def.key ? null : def.key);
+    });
     bar.appendChild(card);
   });
 }
@@ -349,14 +504,13 @@ function selectDef(key: string | null) {
 
 window.addEventListener('keydown', (e) => {
   const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6'].indexOf(e.code);
-  if (idx >= 0 && idx < TOWER_DEFS.length) {
+  if (idx >= 0 && idx < TOWER_DEFS.length && level.towers.includes(TOWER_DEFS[idx].key)) {
     selectDef(selectedDef === TOWER_DEFS[idx].key ? null : TOWER_DEFS[idx].key);
   }
   if (e.code === 'Escape') { selectDef(null); selectTowerCell(null); }
   if (e.code === 'Space') { e.preventDefault(); setPaused(!paused); }
 });
 window.addEventListener('contextmenu', (e) => { e.preventDefault(); selectDef(null); selectTowerCell(null); });
-document.getElementById('ov-btn')!.addEventListener('click', () => location.reload());
 
 // ---------- 射程圈（建造预览 + 已选中塔） ----------
 function makeRangeRing(color: string): THREE.LineLoop {
@@ -421,10 +575,11 @@ function refreshTowerPanel() {
     `${tower.def.name} ${tower.def.sub} · LV.${tower.level}`;
   const dmg = Math.round(game.towerDamage(tower));
   const range = game.towerRange(tower).toFixed(2);
+  const perkLine = tower.perk ? `<br><span style="color:var(--amber)">◆ ${tower.perk.name}</span>` : '';
   document.getElementById('tw-stats')!.innerHTML =
-    tower.def.damage > 0
+    (tower.def.damage > 0
       ? `伤害 <b>${dmg}</b> · 射程 <b>${range}</b><br>${tower.def.desc}`
-      : `射程 <b>${range}</b><br>${tower.def.desc}`;
+      : `射程 <b>${range}</b><br>${tower.def.desc}`) + perkLine;
   const upBtn = document.getElementById('tw-upgrade') as HTMLButtonElement;
   const maxed = tower.level >= 3;
   upBtn.disabled = maxed || game.energy < game.upgradeCost(tower);
@@ -650,6 +805,7 @@ function tick() {
 
   game.update(paused ? 0 : dt);
   mm.update();
+  updateTutorial(dt);
 
   // 塔面板低频刷新（能源变化影响升级按钮可用性）
   panelRefreshT -= dt;

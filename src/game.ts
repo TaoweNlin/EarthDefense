@@ -3,6 +3,8 @@
 
 import * as THREE from 'three';
 import type { GoldbergGrid, Cell } from './goldberg';
+import type { LevelCfg } from './levels';
+import { sfx } from './sound';
 
 const COL_CYAN = new THREE.Color('#22d3ee');
 const COL_ROSE = new THREE.Color('#f43f5e');
@@ -54,29 +56,32 @@ const BOSS_REWARD = 300;
 const BOSS_RADIUS = 1.5;
 const BOSS_DROP_INTERVAL = 11;
 
-// ========== 关卡 ==========
+// ========== 关卡通用 ==========
 
-const START_ENERGY = 320;
 const CITY_HP = 100;
 const CITY_INCOME = 1.6;
 const CITY_HIT_DAMAGE = 15;
-const CITY_NAMES = ['NOVA-1', 'KIRIN-2', 'AURUM-3', 'TERRA-4', 'ZENIT-5'];
+const CITY_NAMES = ['NOVA-1', 'KIRIN-2', 'AURUM-3', 'TERRA-4', 'ZENIT-5', 'HALO-6'];
 
-interface WaveCfg {
-  prewave: number;
-  drops: { type: keyof typeof GROUND_DEFS; n: number }[];
-  jammers?: number;
-  boss?: boolean;
-}
-const WAVES: WaveCfg[] = [
-  { prewave: 16, drops: [{ type: 'swarm', n: 5 }] },
-  { prewave: 12, drops: [{ type: 'swarm', n: 5 }, { type: 'runner', n: 4 }] },
-  { prewave: 13, drops: [{ type: 'armored', n: 3 }, { type: 'swarm', n: 6 }], jammers: 1 },
-  { prewave: 14, drops: [{ type: 'runner', n: 5 }, { type: 'armored', n: 4 }, { type: 'swarm', n: 6 }], jammers: 1 },
-  { prewave: 16, drops: [{ type: 'armored', n: 4 }, { type: 'swarm', n: 6 }], boss: true },
+// 遗迹词条（建在五边形格上随机获得）
+export interface Perk { key: 'rapid' | 'power' | 'long' | 'siphon'; name: string }
+const PERKS: Perk[] = [
+  { key: 'rapid', name: '超频 · 射速 +25%' },
+  { key: 'power', name: '增幅 · 伤害 +25%' },
+  { key: 'long', name: '广域 · 射程 +15%' },
+  { key: 'siphon', name: '汲能 · +1.5⚡/s' },
 ];
 
-type Phase = 'prewave' | 'active' | 'won' | 'lost';
+export interface GameStats {
+  kills: number;        // 地面击杀
+  intercepted: number;  // 在轨拦截（运输舰/干扰者/母舰）
+  leaked: number;       // 攻入城市的单位
+  citiesLost: number;
+  duration: number;     // 秒
+  stars: number;        // 1-3，失败为 0
+}
+
+type Phase = 'idle' | 'prewave' | 'active' | 'won' | 'lost';
 
 // ========== 实体 ==========
 
@@ -88,6 +93,7 @@ interface City {
 
 export interface Tower {
   def: TowerDef; level: number; cellId: number; invested: number;
+  perk: Perk | null;
   group: THREE.Group; ring: THREE.Mesh | null; edges: THREE.LineSegments[];
   cooldown: number;
   // 轨道激光的锁定状态
@@ -125,11 +131,14 @@ interface Projectile {
 // ========== 主类 ==========
 
 export class Game {
-  phase: Phase = 'prewave';
-  energy = START_ENERGY;
+  phase: Phase = 'idle';
+  energy: number;
   waveIdx = 0;
-  private prewaveT = WAVES[0].prewave;
+  private prewaveT = 0;
   private time = 0;
+  private battleTime = 0;
+  stats: GameStats = { kills: 0, intercepted: 0, leaked: 0, citiesLost: 0, duration: 0, stars: 0 };
+  private cityCenter = new THREE.Vector3(0, 1, 0);
 
   cities: City[] = [];
   towers: Tower[] = [];
@@ -145,11 +154,24 @@ export class Game {
 
   private laserMat = new THREE.LineBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false });
 
-  constructor(private earthGroup: THREE.Group, private grid: GoldbergGrid) {
+  constructor(
+    private earthGroup: THREE.Group,
+    private grid: GoldbergGrid,
+    private cfg: LevelCfg,
+    private onEnd: (win: boolean, stats: GameStats) => void,
+  ) {
+    this.energy = cfg.startEnergy;
     earthGroup.add(this.root);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
+  }
+
+  /** 由主菜单/自动开始调用，正式进入布防倒计时 */
+  start() {
+    if (this.phase !== 'idle') return;
+    this.phase = 'prewave';
+    this.prewaveT = this.cfg.waves[0].prewave;
     this.showCountdown(true);
   }
 
@@ -157,17 +179,25 @@ export class Game {
 
   private spawnCities() {
     const land = this.grid.cells.filter((c) => c.terrain === 'land' && !c.isPentagon);
-    const picked: Cell[] = [land[Math.floor(land.length * 0.37)]];
-    while (picked.length < 5) {
+    // 防区聚集度：cluster=1 城市挤在一块大陆，=0 全球铺开
+    const anchor = land[Math.floor(this.rand() * land.length)];
+    const maxAngle = 0.55 + (1 - this.cfg.cityCluster) * (Math.PI - 0.55);
+    let candidates = land.filter((c) => c.center.angleTo(anchor.center) <= maxAngle);
+    if (candidates.length < this.cfg.cities) candidates = land;
+
+    const picked: Cell[] = [anchor];
+    while (picked.length < this.cfg.cities) {
       let best: Cell | null = null, bestD = -1;
-      for (const c of land) {
+      for (const c of candidates) {
         if (picked.includes(c)) continue;
         let d = Infinity;
         for (const p of picked) d = Math.min(d, c.center.angleTo(p.center));
         if (d > bestD) { bestD = d; best = c; }
       }
-      picked.push(best!);
+      if (!best) break;
+      picked.push(best);
     }
+    this.cityCenter = picked.reduce((v, c) => v.add(c.center), new THREE.Vector3()).normalize();
 
     const listEl = document.getElementById('city-list')!;
     listEl.innerHTML = '';
@@ -249,6 +279,7 @@ export class Game {
     const def = TOWER_DEFS.find((d) => d.key === defKey)!;
     const cell = this.grid.cells[cellId];
     const cost = this.effectiveCost(def, cell);
+    if (!this.cfg.towers.includes(defKey)) return { ok: false, reason: '本关未解锁', cost };
     if (this.phase === 'won' || this.phase === 'lost') return { ok: false, reason: '战斗已结束', cost };
     if (this.occupied.has(cellId)) return { ok: false, reason: '区块已占用', cost };
     if (cell.terrain === 'mountain' && def.kind === 'ground')
@@ -259,7 +290,7 @@ export class Game {
 
   tryBuild(cellId: number, defKey: string): boolean {
     const check = this.canBuild(cellId, defKey);
-    if (!check.ok) return false;
+    if (!check.ok) { sfx.play('deny'); return false; }
     const def = TOWER_DEFS.find((d) => d.key === defKey)!;
     const cell = this.grid.cells[cellId];
     this.energy -= check.cost;
@@ -268,13 +299,22 @@ export class Game {
     group.scale.setScalar(0.01);
     this.root.add(group);
 
+    // 遗迹词条：五边形格随机赋予
+    let perk: Perk | null = null;
+    if (cell.isPentagon) {
+      perk = PERKS[Math.floor(this.rand() * PERKS.length)];
+      this.spawnRing(cell.center.clone().multiplyScalar(1.012), COL_AMBER, 0.06);
+      this.banner('遗迹共鸣', `RELIC BONUS // ${perk.name}`, true, 2600);
+    }
+
     this.occupied.add(cellId);
     this.towers.push({
-      def, level: 1, cellId, invested: check.cost,
+      def, level: 1, cellId, invested: check.cost, perk,
       group, ring: (group.userData.ring as THREE.Mesh) ?? null,
       edges: group.userData.edges as THREE.LineSegments[],
       cooldown: 0, lockTarget: null, lockT: 0, beam: null, jammed: false,
     });
+    sfx.play('build');
     this.updateHud();
     return true;
   }
@@ -287,7 +327,8 @@ export class Game {
     const t = this.towerAt(cellId);
     if (!t || t.level >= MAX_LEVEL) return false;
     const cost = this.upgradeCost(t);
-    if (this.energy < cost) return false;
+    if (this.energy < cost) { sfx.play('deny'); return false; }
+    sfx.play('upgrade');
     this.energy -= cost;
     t.invested += cost;
     t.level++;
@@ -307,6 +348,7 @@ export class Game {
     const idx = this.towers.findIndex((t) => t.cellId === cellId);
     if (idx < 0) return;
     const t = this.towers[idx];
+    sfx.play('sell');
     this.energy += Math.round(t.invested * SELL_REFUND);
     if (t.beam) this.root.remove(t.beam);
     this.root.remove(t.group);
@@ -318,7 +360,9 @@ export class Game {
 
   towerRange(t: Tower): number {
     const mountain = this.grid.cells[t.cellId].terrain === 'mountain';
-    return t.def.range * (mountain ? MOUNTAIN_RANGE_MUL : 1) + (t.level - 1) * 0.025;
+    let r = t.def.range * (mountain ? MOUNTAIN_RANGE_MUL : 1) + (t.level - 1) * 0.025;
+    if (t.perk?.key === 'long') r *= 1.15;
+    return r;
   }
 
   towerDamage(t: Tower): number {
@@ -328,6 +372,7 @@ export class Game {
         .filter((nb) => this.towers.some((o) => o.cellId === nb)).length;
       dmg *= 1 + 0.45 * adj;
     }
+    if (t.perk?.key === 'power') dmg *= 1.25;
     return dmg;
   }
 
@@ -491,10 +536,14 @@ export class Game {
 
   update(dt: number) {
     this.time += dt;
+    if (this.phase === 'idle') { this.animateIdle(dt); return; }
     if (this.phase === 'won' || this.phase === 'lost') { this.animateIdle(dt); this.updateFx(dt); return; }
+    this.battleTime += dt;
 
     const aliveCities = this.cities.filter((c) => c.alive).length;
     this.energy += aliveCities * CITY_INCOME * dt;
+    // 汲能词条被动产能
+    for (const t of this.towers) if (t.perk?.key === 'siphon') this.energy += 1.5 * dt;
 
     if (this.phase === 'prewave') {
       this.prewaveT -= dt;
@@ -512,11 +561,11 @@ export class Game {
 
     if (this.phase === 'active' && this.waveCleared()) {
       this.waveIdx++;
-      if (this.waveIdx >= WAVES.length) {
+      if (this.waveIdx >= this.cfg.waves.length) {
         this.endGame(true);
       } else {
         this.phase = 'prewave';
-        this.prewaveT = WAVES[this.waveIdx].prewave;
+        this.prewaveT = this.cfg.waves[this.waveIdx].prewave;
         this.setWaveLabel();
         this.showCountdown(true);
         this.banner(`WAVE ${this.waveIdx + 1}`, '敌方登陆舱接近中 // INBOUND', false, 2600);
@@ -534,11 +583,17 @@ export class Game {
   // ============ 波次与登陆 ============
 
   private prepareLandings() {
-    const cfg = WAVES[this.waveIdx];
+    const cfg = this.cfg.waves[this.waveIdx];
     const dist = this.bfsFromCities();
-    const candidates = this.grid.cells.filter((c) =>
+    // 登陆点约束：距城市 2~5 格，且在本关允许的登陆扇区内（区域→全球曲线）
+    let candidates = this.grid.cells.filter((c) =>
       c.terrain !== 'ocean' && !this.occupied.has(c.id) &&
-      dist[c.id] >= 2 && dist[c.id] <= 5);
+      dist[c.id] >= 2 && dist[c.id] <= 5 &&
+      c.center.angleTo(this.cityCenter) <= this.cfg.landingSpread);
+    if (!candidates.length) {
+      candidates = this.grid.cells.filter((c) =>
+        c.terrain !== 'ocean' && !this.occupied.has(c.id) && dist[c.id] >= 2 && dist[c.id] <= 5);
+    }
     const pool = candidates.length ? candidates : this.grid.cells.filter((c) => c.terrain !== 'ocean');
     this.pending = [];
     for (let i = 0; i < cfg.drops.length; i++) {
@@ -601,8 +656,9 @@ export class Game {
     this.showCountdown(false);
     this.banner(`WAVE ${this.waveIdx + 1}`, '敌袭 // HOSTILE INBOUND', false, 2600);
     if (!this.pending.length) this.prepareLandings();
+    sfx.play('alarm');
 
-    const cfg = WAVES[this.waveIdx];
+    const cfg = this.cfg.waves[this.waveIdx];
     cfg.drops.forEach((drop, i) => {
       const p = this.pending[i];
       this.spawnTransport(p.cellId, drop, i * 2.2, p.marker, false, { u: p.u, trail: p.trail });
@@ -712,6 +768,7 @@ export class Game {
     o.group.add(ring);
     this.root.add(o.group);
     this.orbitals.push(o);
+    sfx.play('jam');
     this.banner('干扰者入轨', 'JAMMER IN ORBIT // 地面塔将被压制', false, 3000);
   }
 
@@ -736,6 +793,7 @@ export class Game {
     o.group.add(inner);
     this.root.add(o.group);
     this.orbitals.push(o);
+    sfx.play('alarm', 0);
     this.banner('母舰逼近', 'MOTHERSHIP DETECTED', false, 3400);
   }
 
@@ -831,9 +889,13 @@ export class Game {
     o.hp -= dmg;
     if (o.hp > 0) return;
     if (o.kind === 'transport') {
+      this.stats.intercepted++;
+      sfx.play('intercept', 120);
       this.finishTransport(o, true);
     } else {
       o.alive = false;
+      this.stats.intercepted++;
+      sfx.play('intercept', 120);
       this.energy += o.kind === 'boss' ? BOSS_REWARD : JAMMER_REWARD;
       this.spawnRing(o.pos.clone(), COL_CYAN, o.kind === 'boss' ? 0.14 : 0.08);
       this.root.remove(o.group);
@@ -907,12 +969,18 @@ export class Game {
     u.alive = false;
     this.root.remove(u.mesh);
     this.spawnRing(u.pos.clone(), reward ? COL_CYAN : COL_ROSE, 0.045);
-    if (reward) this.energy += u.def.reward;
+    if (reward) {
+      this.energy += u.def.reward;
+      this.stats.kills++;
+      sfx.play('explosion', 90);
+    }
   }
 
   private hitCity(cellId: number) {
     const city = this.cities.find((c) => c.cellId === cellId);
     if (!city || !city.alive) return;
+    this.stats.leaked++;
+    sfx.play('cityhit', 200);
     city.hp -= CITY_HIT_DAMAGE;
     city.row.classList.add('hurt');
     setTimeout(() => city.row.classList.remove('hurt'), 600);
@@ -923,6 +991,7 @@ export class Game {
     if (city.hp <= 0) {
       city.hp = 0;
       city.alive = false;
+      this.stats.citiesLost++;
       city.row.classList.add('dead');
       city.buildings.traverse((obj) => {
         const mat = (obj as THREE.Mesh | THREE.LineSegments).material as THREE.MeshBasicMaterial | undefined;
@@ -983,6 +1052,7 @@ export class Game {
           break;
         }
       }
+      if (tw.perk?.key === 'rapid') rateMul *= 1.25;
 
       const range = this.towerRange(tw);
 
@@ -1002,7 +1072,7 @@ export class Game {
             this.spawnArc(orbPos, u.pos.clone());
             arcs++;
           }
-          if (arcs > 0) this.spawnFlash(orbPos, COL_CYAN, 0.008, 0.14);
+          if (arcs > 0) { this.spawnFlash(orbPos, COL_CYAN, 0.008, 0.14); sfx.play('arc', 250); }
           tw.cooldown = 0.38;
         }
         continue;
@@ -1025,6 +1095,7 @@ export class Game {
         tw.cooldown = tw.def.cooldown;
         const from = towerN.clone().multiplyScalar(towerH + 0.04);
         this.spawnFlash(from, COL_AMBER, 0.01, 0.15);
+        sfx.play('missile', 150);
         this.launchMissile(from, target.pos.clone(), this.towerDamage(tw));
         continue;
       }
@@ -1048,12 +1119,14 @@ export class Game {
         this.spawnBeam(from, target.pos.clone(), 0.006, COL_CYAN);
         this.spawnFlash(from, COL_AMBER, 0.012, 0.2);
         this.spawnFlash(target.pos.clone(), COL_CYAN, 0.016, 0.25);
+        sfx.play('prism', 180);
       } else {
         // 脉冲炮：射线 + 枪口焰 + 命中闪
         const from = towerN.clone().multiplyScalar(towerH + 0.062);
         this.fireLine(from, target.pos.clone(), 0.14);
         this.spawnFlash(from, COL_CYAN, 0.007, 0.12);
         this.spawnFlash(target.pos.clone(), COL_ROSE, 0.01, 0.15);
+        sfx.play('shoot', 80);
       }
       if (target.hp <= 0) this.killUnit(target, true);
     }
@@ -1358,13 +1431,14 @@ export class Game {
       c.bar.style.transform = `scaleX(${c.hp / CITY_HP})`;
     }
     document.querySelectorAll<HTMLElement>('.tower-card').forEach((card) => {
+      if (card.dataset.locked) return; // 未解锁的卡保持置灰
       const def = TOWER_DEFS.find((d) => d.key === card.dataset.key)!;
       card.classList.toggle('poor', this.energy < def.cost);
     });
   }
 
   private setWaveLabel() {
-    document.getElementById('wave-val')!.textContent = `${this.waveIdx + 1}/${WAVES.length}`;
+    document.getElementById('wave-val')!.textContent = `${this.waveIdx + 1}/${this.cfg.waves.length}`;
   }
 
   private showCountdown(show: boolean) {
@@ -1383,13 +1457,18 @@ export class Game {
 
   private endGame(win: boolean) {
     this.phase = win ? 'won' : 'lost';
-    const ov = document.getElementById('overlay')!;
-    ov.classList.add('show', win ? 'win' : 'lose');
-    ov.classList.remove(win ? 'lose' : 'win');
-    document.getElementById('ov-title')!.textContent = win ? '防线守住了' : '防线崩溃';
-    document.getElementById('ov-sub')!.textContent = win
-      ? 'EARTH DEFENSE GRID HOLDS' : 'ORBITAL DEFENSE GRID LOST';
+    sfx.play(win ? 'win' : 'lose');
     document.getElementById('status-text')!.textContent = win ? 'SECURED' : 'OFFLINE';
+    // 评星：3★ 城市无损且总血量≥80%；2★ 至多损失 1 城；1★ 惨胜
+    this.stats.duration = Math.round(this.battleTime);
+    if (win) {
+      const totalHp = this.cities.reduce((s, c) => s + c.hp, 0) / (this.cities.length * CITY_HP);
+      this.stats.stars = this.stats.citiesLost === 0 && totalHp >= 0.8 ? 3
+        : this.stats.citiesLost <= 1 ? 2 : 1;
+    } else {
+      this.stats.stars = 0;
+    }
+    this.onEnd(win, this.stats);
   }
 
   private seed = 987654321;

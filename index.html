@@ -176,26 +176,92 @@
     #countdown.show { opacity: 1; }
     #countdown b { color: var(--amber); font-weight: 400; }
 
-    /* ===== 结局遮罩 ===== */
-    #overlay {
-      position: fixed; inset: 0; z-index: 20; display: none;
-      align-items: center; justify-content: center; flex-direction: column;
-      background: radial-gradient(ellipse at center, rgba(5, 8, 16, 0.55), rgba(5, 8, 16, 0.92));
-      pointer-events: auto;
-    }
-    #overlay.show { display: flex; }
-    #ov-title { font-size: 44px; letter-spacing: 18px; text-shadow: 0 0 30px currentColor; }
-    #overlay.win #ov-title { color: var(--cyan); }
-    #overlay.lose #ov-title { color: var(--rose); }
-    #ov-sub { margin-top: 14px; font-size: 12px; letter-spacing: 6px; color: var(--cyan-dim); }
-    #ov-btn {
-      margin-top: 40px; padding: 10px 38px; cursor: pointer;
-      font-family: inherit; font-size: 12px; letter-spacing: 6px;
+    /* ===== 通用大按钮 ===== */
+    .big-btn {
+      padding: 11px 34px; cursor: pointer;
+      font-family: inherit; font-size: 13px; letter-spacing: 5px;
       color: var(--cyan); background: transparent; border: 1px solid var(--cyan-dim);
       clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
       transition: all 0.2s;
     }
-    #ov-btn:hover { background: rgba(34, 211, 238, 0.1); box-shadow: 0 0 18px rgba(34, 211, 238, 0.3); }
+    .big-btn:hover { background: rgba(34, 211, 238, 0.1); box-shadow: 0 0 18px rgba(34, 211, 238, 0.3); }
+    .big-btn.primary { color: var(--amber); border-color: rgba(251, 191, 36, 0.5); }
+    .big-btn.primary:hover { background: rgba(251, 191, 36, 0.1); box-shadow: 0 0 18px rgba(251, 191, 36, 0.3); }
+    .big-btn:disabled { opacity: 0.3; cursor: not-allowed; box-shadow: none !important; background: transparent !important; }
+
+    /* ===== 结算遮罩 ===== */
+    #overlay {
+      position: fixed; inset: 0; z-index: 20; display: none;
+      align-items: center; justify-content: center; flex-direction: column;
+      background: radial-gradient(ellipse at center, rgba(5, 8, 16, 0.55), rgba(5, 8, 16, 0.94));
+      pointer-events: auto;
+    }
+    #overlay.show { display: flex; }
+    #ov-title { font-size: 42px; letter-spacing: 16px; text-shadow: 0 0 30px currentColor; }
+    #overlay.win #ov-title { color: var(--cyan); }
+    #overlay.lose #ov-title { color: var(--rose); }
+    #ov-sub { margin-top: 12px; font-size: 12px; letter-spacing: 6px; color: var(--cyan-dim); }
+    #ov-stars { margin-top: 20px; font-size: 30px; letter-spacing: 14px; color: var(--amber); text-shadow: 0 0 16px rgba(251, 191, 36, 0.6); }
+    #ov-stats {
+      margin-top: 26px; display: grid; grid-template-columns: auto auto; gap: 8px 34px;
+      font-size: 12px; letter-spacing: 2px; color: rgba(34, 211, 238, 0.75);
+    }
+    #ov-stats b { color: var(--amber); font-weight: 400; text-align: right; }
+    #ov-btns { margin-top: 40px; display: flex; gap: 16px; }
+
+    /* ===== 主菜单 ===== */
+    #menu {
+      position: fixed; inset: 0; z-index: 25; display: none;
+      align-items: center; justify-content: center; flex-direction: column;
+      background: radial-gradient(ellipse at center, rgba(5, 8, 16, 0.35), rgba(5, 8, 16, 0.88));
+      pointer-events: auto;
+    }
+    #menu.show { display: flex; }
+    #menu-title {
+      font-size: 52px; letter-spacing: 22px; color: var(--cyan);
+      text-shadow: 0 0 34px rgba(34, 211, 238, 0.7);
+    }
+    #menu-sub { margin-top: 12px; font-size: 13px; letter-spacing: 8px; color: var(--cyan-dim); }
+    #menu-flavor { margin-top: 30px; font-size: 12px; letter-spacing: 3px; color: rgba(251, 191, 36, 0.75); min-height: 18px; }
+    #level-grid {
+      margin-top: 22px; display: grid; grid-template-columns: repeat(4, 148px); gap: 12px;
+    }
+    .lv-card {
+      padding: 13px 14px; cursor: pointer; text-align: left;
+      background: var(--panel-bg); border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+      transition: all 0.15s;
+    }
+    .lv-card:hover { border-color: var(--cyan); box-shadow: 0 0 14px rgba(34, 211, 238, 0.25); }
+    .lv-card.locked { opacity: 0.35; cursor: not-allowed; }
+    .lv-card.locked:hover { border-color: var(--cyan-dim); box-shadow: none; }
+    .lv-num { font-size: 10px; letter-spacing: 2px; color: var(--cyan-dim); }
+    .lv-name { font-size: 15px; letter-spacing: 3px; margin-top: 4px; }
+    .lv-stars { font-size: 11px; margin-top: 5px; color: var(--amber); letter-spacing: 3px; min-height: 14px; }
+    #menu-start { margin-top: 34px; }
+
+    /* ===== 教学提示 ===== */
+    #tutorial {
+      position: fixed; bottom: 190px; left: 50%; transform: translateX(-50%);
+      z-index: 15; max-width: 520px; text-align: center;
+      padding: 12px 26px; font-size: 13px; letter-spacing: 2px; line-height: 1.8;
+      color: var(--amber); background: var(--panel-bg);
+      border: 1px solid rgba(251, 191, 36, 0.45);
+      clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+      opacity: 0; transition: opacity 0.3s; pointer-events: none;
+    }
+    #tutorial.show { opacity: 1; }
+
+    /* ===== 静音按钮 ===== */
+    #mute-btn {
+      position: fixed; top: 36px; right: 372px; z-index: 12;
+      width: 40px; height: 40px; cursor: pointer;
+      font-size: 16px; color: var(--cyan-dim);
+      background: var(--panel-bg); border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    }
+    #mute-btn:hover { color: var(--cyan); }
+    #mute-btn.muted { color: rgba(244, 63, 94, 0.7); }
 
     /* ===== 暂停指示 ===== */
     #paused {
@@ -297,8 +363,25 @@
   <div id="overlay">
     <div id="ov-title">防线守住了</div>
     <div id="ov-sub">EARTH DEFENSE GRID HOLDS</div>
-    <button id="ov-btn">重新部署 // RESTART</button>
+    <div id="ov-stars"></div>
+    <div id="ov-stats"></div>
+    <div id="ov-btns">
+      <button class="big-btn" id="ov-retry">重新部署</button>
+      <button class="big-btn primary" id="ov-next">下一关 ▸</button>
+      <button class="big-btn" id="ov-menu">返回基地</button>
+    </div>
   </div>
+
+  <div id="menu">
+    <div id="menu-title">寰宇防线</div>
+    <div id="menu-sub">EARTH DEFENSE // ORBITAL COMMAND</div>
+    <div id="menu-flavor"></div>
+    <div id="level-grid"></div>
+    <button class="big-btn primary" id="menu-start">开始作战 // ENGAGE</button>
+  </div>
+
+  <div id="tutorial"></div>
+  <button id="mute-btn" title="[M] 静音">♪</button>
 
   <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1-6] 选塔 · 点塔查看/升级 · [空格] 暂停</div>
 
