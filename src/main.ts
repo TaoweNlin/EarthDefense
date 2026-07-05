@@ -247,35 +247,8 @@ export const MOUNTAIN_TOP = 1.018;
   earthGroup.add(edgeLines);
 }
 
-// ---------- 轨道环 ----------
-const orbitGroup = new THREE.Group();
-scene.add(orbitGroup);
-const orbitRings: THREE.Line[] = [];
-{
-  const configs = [
-    { r: 1.45, tilt: 0.42, color: COL_CYAN, opacity: 0.28 },
-    { r: 1.62, tilt: -0.65, color: COL_CYAN, opacity: 0.2 },
-    { r: 1.8, tilt: 1.1, color: COL_AMBER, opacity: 0.16 },
-  ];
-  for (const cfg of configs) {
-    const pts: THREE.Vector3[] = [];
-    const N = 256;
-    for (let i = 0; i <= N; i++) {
-      const a = (i / N) * Math.PI * 2;
-      pts.push(new THREE.Vector3(Math.cos(a) * cfg.r, 0, Math.sin(a) * cfg.r));
-    }
-    const g = new THREE.BufferGeometry().setFromPoints(pts);
-    const m = new THREE.LineDashedMaterial({
-      color: cfg.color, transparent: true, opacity: cfg.opacity,
-      dashSize: 0.045, gapSize: 0.03, depthWrite: false,
-    });
-    const line = new THREE.Line(g, m);
-    line.computeLineDistances();
-    line.rotation.x = cfg.tilt;
-    orbitGroup.add(line);
-    orbitRings.push(line);
-  }
-}
+// 轨道线原则：不放装饰性轨道环，轨道线只用于传达实际信息
+// （运输舰航迹、干扰者/母舰的环绕轨道，未来的卫星武器轨道）
 
 // ---------- 悬停高亮 ----------
 const hoverGroup = new THREE.Group();
@@ -664,13 +637,6 @@ function tick() {
   // 缩放缓动 + 相机位置更新
   camDist += (camDistTarget - camDist) * Math.min(1, dt * 6);
   updateCamera();
-
-  // 轨道环缓慢转动 + 呼吸
-  orbitRings.forEach((ring, i) => {
-    ring.rotation.z += dt * (0.05 + i * 0.03) * (i % 2 ? -1 : 1);
-    const m = ring.material as THREE.LineDashedMaterial;
-    m.opacity = (0.16 + i * 0.05) * (0.8 + 0.2 * Math.sin(t * 1.3 + i * 2.1));
-  });
 
   // 网格呼吸
   (gridLines.material as THREE.LineBasicMaterial).opacity = 0.04 + 0.015 * Math.sin(t * 0.9);

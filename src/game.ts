@@ -652,10 +652,34 @@ export class Game {
     this.orbitals.push(o);
   }
 
+  /** 环绕型轨道单位的轨道线：实际飞行圆轨道的虚线投影 */
+  private makeOrbitLine(axis: THREE.Vector3, radius: number, opacity: number): THREE.Line {
+    const ref = Math.abs(axis.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const e1 = new THREE.Vector3().crossVectors(axis, ref).normalize();
+    const e2 = new THREE.Vector3().crossVectors(axis, e1).normalize();
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 128; i++) {
+      const a = (i / 128) * Math.PI * 2;
+      pts.push(e1.clone().multiplyScalar(Math.cos(a))
+        .addScaledVector(e2, Math.sin(a)).multiplyScalar(radius));
+    }
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineDashedMaterial({
+        color: COL_ROSE, transparent: true, opacity,
+        dashSize: 0.035, gapSize: 0.025, depthWrite: false,
+      }));
+    line.computeLineDistances();
+    line.renderOrder = 8;
+    this.root.add(line);
+    return line;
+  }
+
   private spawnJammer() {
     const o = this.baseOrbital('jammer', JAMMER_HP);
     o.orbitAxis = new THREE.Vector3().randomDirection();
     o.orbitAngle = this.rand() * Math.PI * 2;
+    o.trail = this.makeOrbitLine(o.orbitAxis, JAMMER_RADIUS, 0.3);
 
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(0.05, 0.012, 8, 20),
@@ -671,6 +695,7 @@ export class Game {
     o.orbitAxis = new THREE.Vector3(0.3, 1, 0.2).normalize();
     o.orbitAngle = this.rand() * Math.PI * 2;
     o.dropTimer = 4;
+    o.trail = this.makeOrbitLine(o.orbitAxis, BOSS_RADIUS, 0.4);
 
     const core = new THREE.Mesh(
       new THREE.OctahedronGeometry(0.09),
@@ -787,6 +812,7 @@ export class Game {
       this.energy += o.kind === 'boss' ? BOSS_REWARD : JAMMER_REWARD;
       this.spawnRing(o.pos.clone(), COL_CYAN, o.kind === 'boss' ? 0.14 : 0.08);
       this.root.remove(o.group);
+      if (o.trail) this.root.remove(o.trail);
       if (o.kind === 'boss') this.banner('母舰击毁', 'MOTHERSHIP DESTROYED', true, 3000);
     }
   }
