@@ -263,6 +263,21 @@
     #mute-btn:hover { color: var(--cyan); }
     #mute-btn.muted { color: rgba(244, 63, 94, 0.7); }
 
+    /* ===== 倍速按钮 ===== */
+    #speed-btn {
+      position: fixed; top: 36px; right: 420px; z-index: 12;
+      width: 40px; height: 40px; cursor: pointer;
+      font-family: inherit; font-size: 13px; letter-spacing: 1px;
+      color: var(--cyan-dim);
+      background: var(--panel-bg); border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    }
+    #speed-btn:hover { color: var(--cyan); }
+    #speed-btn.boost {
+      color: var(--amber); border-color: rgba(251, 191, 36, 0.5);
+      box-shadow: 0 0 10px rgba(251, 191, 36, 0.25);
+    }
+
     /* ===== 暂停指示 ===== */
     #paused {
       top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -385,8 +400,9 @@
 
   <div id="tutorial"></div>
   <button id="mute-btn" title="[M] 静音">♪</button>
+  <button id="speed-btn" title="[F] 倍速">1×</button>
 
-  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1-6] 选塔 · 点塔查看/升级 · [空格] 暂停</div>
+  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1-7] 选塔 · 点塔查看/升级 · [空格] 暂停 · [F] 倍速</div>
 
   <div class="corner" id="c-tl"></div>
   <div class="corner" id="c-tr"></div>

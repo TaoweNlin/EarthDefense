@@ -126,8 +126,9 @@ earthGroup.add(earthMesh);
   earthGroup.add(atmo);
 }
 
-// ---------- Goldberg 网格（行星布局由关卡种子决定） ----------
-const grid = buildGoldberg(8, level.seed);
+// ---------- Goldberg 网格（行星布局由关卡种子决定；无尽模式每次随机行星） ----------
+const mapSeed = isEndless ? (Math.floor(Math.random() * 0x7fffffff) || 1) : level.seed;
+const grid = buildGoldberg(8, mapSeed);
 
 function lineSegments(points: THREE.Vector3[], radius: number, color: THREE.Color, opacity: number): THREE.LineSegments {
   const pos = new Float32Array(points.length * 3);
@@ -563,6 +564,7 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'Escape') { selectDef(null); selectTowerCell(null); }
   if (e.code === 'Space') { e.preventDefault(); setPaused(!paused); }
+  if (e.code === 'KeyF') cycleSpeed();
 });
 window.addEventListener('contextmenu', (e) => { e.preventDefault(); selectDef(null); selectTowerCell(null); });
 
@@ -654,6 +656,17 @@ function setPaused(on: boolean) {
   paused = on;
   document.getElementById('paused')!.classList.toggle('show', on);
 }
+
+// ---------- 倍速（1×/2×/4×，按子步执行保证数值一致） ----------
+let timeScale = 1;
+function cycleSpeed() {
+  timeScale = timeScale === 1 ? 2 : timeScale === 2 ? 4 : 1;
+  const btn = document.getElementById('speed-btn')!;
+  btn.textContent = `${timeScale}×`;
+  btn.classList.toggle('boost', timeScale > 1);
+  sfx.play('click');
+}
+document.getElementById('speed-btn')!.addEventListener('click', cycleSpeed);
 
 // ---------- 迷你地球仪 ----------
 const mm = (() => {
@@ -859,7 +872,12 @@ function tick() {
   setHover(hovered);
   updateRangePreview(hovered);
 
-  game.update(paused ? 0 : dt);
+  // 倍速 = 多次子步更新，数值行为与 1× 完全一致
+  if (!paused) {
+    for (let s = 0; s < timeScale; s++) game.update(dt);
+  } else {
+    game.update(0);
+  }
   mm.update();
   updateTutorial(dt);
 
