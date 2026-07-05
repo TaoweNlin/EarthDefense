@@ -806,10 +806,7 @@ export class Game {
     if (this.phase === 'won' || this.phase === 'lost') { this.animateIdle(dt); this.updateFx(dt); return; }
     this.battleTime += dt;
 
-    const aliveCities = this.cities.filter((c) => c.alive).length;
-    this.energy += aliveCities * CITY_INCOME * dt;
-    // 汲能词条被动产能
-    for (const t of this.towers) if (t.perk?.key === 'siphon') this.energy += 1.5 * dt;
+    this.energy += this.incomeRate() * dt;
 
     // 连续进攻调度：倒计时到点就发起下一波，不等上一波清完
     if (this.launched < this.totalWaves()) {
@@ -1950,10 +1947,29 @@ export class Game {
     return n;
   }
 
+  // ============ 经济 ============
+
+  /** 城市网络加成：每多一座存活城市，全体收入 +25%（守多城的经济理由） */
+  cityNetworkMul(): number {
+    const alive = this.cities.filter((c) => c.alive).length;
+    return 1 + 0.25 * Math.max(0, alive - 1);
+  }
+
+  incomeRate(): number {
+    const alive = this.cities.filter((c) => c.alive).length;
+    let rate = alive * CITY_INCOME * this.cityNetworkMul();
+    for (const t of this.towers) if (t.perk?.key === 'siphon') rate += 1.5;
+    return rate;
+  }
+
   // ============ HUD ============
 
   private updateHud() {
     document.getElementById('energy-val')!.textContent = Math.floor(this.energy).toString();
+    document.getElementById('income-val')!.textContent = `+${this.incomeRate().toFixed(1)}/s`;
+    const mul = this.cityNetworkMul();
+    document.getElementById('city-label')!.textContent =
+      mul > 1 ? `城市网络 CITY GRID · 收益 +${Math.round((mul - 1) * 100)}%` : '城市网络 CITY GRID';
     for (const c of this.cities) {
       c.bar.style.transform = `scaleX(${c.hp / c.maxHp})`;
     }

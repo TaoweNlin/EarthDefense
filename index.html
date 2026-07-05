@@ -62,6 +62,7 @@
     #hud-res { top: 36px; right: 44px; display: flex; gap: 12px; }
     .res-box { min-width: 156px; text-align: right; }
     .res-val { font-size: 30px; letter-spacing: 1px; text-shadow: 0 0 10px currentColor; }
+    .res-sub { font-size: 11px; letter-spacing: 1px; color: rgba(251, 191, 36, 0.65); margin-top: 2px; }
     #energy-val { color: var(--amber); }
     #wave-val { color: var(--cyan); }
 
@@ -332,6 +333,7 @@
     <div class="panel res-box">
       <div class="p-label">能源 ENERGY</div>
       <div class="res-val" id="energy-val">0</div>
+      <div class="res-sub" id="income-val">+0.0/s</div>
     </div>
     <div class="panel res-box">
       <div class="p-label">波次 WAVE</div>
@@ -340,7 +342,7 @@
   </div>
 
   <div class="hud panel" id="hud-cities">
-    <div class="p-label">城市网络 CITY GRID</div>
+    <div class="p-label" id="city-label">城市网络 CITY GRID</div>
     <div id="city-list"></div>
   </div>
 
