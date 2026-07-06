@@ -6,7 +6,7 @@
 
 export interface WaveCfg {
   prewave: number;  // 距上一波发起的秒数（首波 = 开局布防时间）
-  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter'; n: number }[];
+  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter' | 'crawler'; n: number }[];
   jammers?: number;
   divers?: number;    // 俯冲艇：不登陆，直接俯冲撞击城市
   gunships?: number;  // 炮舰：悬停在城市上空持续轰炸，只能防空打
@@ -38,8 +38,8 @@ const T1 = ['pulse'];
 const T2 = ['pulse', 'tesla'];
 const T3 = ['pulse', 'tesla', 'laser', 'radar'];
 const T4 = ['pulse', 'tesla', 'laser', 'radar', 'missile'];
-const T5 = ['pulse', 'tesla', 'laser', 'radar', 'missile', 'prism'];
-const T7 = ['pulse', 'tesla', 'laser', 'radar', 'missile', 'prism', 'satellite'];
+const T5 = ['pulse', 'tesla', 'laser', 'radar', 'missile', 'prism', 'gatling'];
+const T7 = ['pulse', 'tesla', 'laser', 'radar', 'missile', 'prism', 'satellite', 'gatling', 'plasma'];
 
 export const LEVELS: LevelCfg[] = [
   {
@@ -105,16 +105,16 @@ export const LEVELS: LevelCfg[] = [
   },
   {
     id: 6, name: '流星雨', sub: 'METEOR FALL',
-    flavor: '大量小型登陆舱多点着陆，裂变体死后仍会分裂扑城。', objective: '抵御疯狂登陆 · 四走廊多线',
+    flavor: '大量小型登陆舱多点着陆，爬行者尸潮与裂变体轮番扑城。', objective: '抵御疯狂登陆 · 四走廊多线',
     seed: 17320508, cities: 2, cityLayout: 'global', cityCluster: 0.4,
     landingSpread: 2.6, lanes: 4, startEnergy: 340, towers: T5,
     waves: [
-      { prewave: 18, drops: [{ type: 'swarm', n: 10 }, { type: 'swarm', n: 10 }] },
-      { prewave: 22, drops: [{ type: 'splitter', n: 7 }, { type: 'swarm', n: 10 }] },
-      { prewave: 22, drops: [{ type: 'runner', n: 10 }, { type: 'splitter', n: 7 }, { type: 'swarm', n: 10 }] },
+      { prewave: 18, drops: [{ type: 'crawler', n: 20 }, { type: 'swarm', n: 10 }] },
+      { prewave: 22, drops: [{ type: 'splitter', n: 7 }, { type: 'crawler', n: 22 }] },
+      { prewave: 22, drops: [{ type: 'runner', n: 10 }, { type: 'splitter', n: 7 }, { type: 'crawler', n: 24 }] },
       { prewave: 24, drops: [{ type: 'splitter', n: 9 }, { type: 'armored', n: 7 }, { type: 'swarm', n: 12 }], jammers: 1 },
-      { prewave: 24, drops: [{ type: 'splitter', n: 7 }, { type: 'runner', n: 12 }, { type: 'swarm', n: 12 }, { type: 'swarm', n: 10 }], divers: 2, wings: 10 },
-      { prewave: 26, drops: [{ type: 'splitter', n: 11 }, { type: 'armored', n: 9 }, { type: 'swarm', n: 14 }, { type: 'runner', n: 10 }], divers: 2, wings: 14 },
+      { prewave: 24, drops: [{ type: 'crawler', n: 26 }, { type: 'runner', n: 12 }, { type: 'swarm', n: 12 }, { type: 'swarm', n: 10 }], divers: 2, wings: 10 },
+      { prewave: 26, drops: [{ type: 'splitter', n: 11 }, { type: 'armored', n: 9 }, { type: 'crawler', n: 28 }, { type: 'runner', n: 10 }], divers: 2, wings: 14 },
     ],
   },
   {

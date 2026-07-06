@@ -559,7 +559,7 @@ function selectDef(key: string | null) {
 }
 
 window.addEventListener('keydown', (e) => {
-  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7'].indexOf(e.code);
+  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(e.code);
   if (idx >= 0 && idx < TOWER_DEFS.length && level.towers.includes(TOWER_DEFS[idx].key)) {
     selectDef(selectedDef === TOWER_DEFS[idx].key ? null : TOWER_DEFS[idx].key);
   }

@@ -30,6 +30,8 @@ export const TOWER_DEFS: TowerDef[] = [
   { key: 'radar',     name: '雷达站',   sub: 'RADAR',   icon: '◍', cost: 120, kind: 'support', range: 0.40, damage: 0,  cooldown: 0,    desc: '射程内塔 +25% 射速' },
   { key: 'prism',     name: '汇聚棱镜', sub: 'PRISM',   icon: '◆', cost: 220, kind: 'ground',  range: 0.42, damage: 42, cooldown: 1.5,  desc: '相邻每塔 +45% 伤害' },
   { key: 'satellite', name: '防御卫星', sub: 'SAT-NET', icon: '✧', cost: 260, kind: 'air',     range: 0.55, damage: 16, cooldown: 0.55, desc: '部署轨道卫星环球巡航' },
+  { key: 'gatling',   name: '加特林',   sub: 'GATLING', icon: '≡', cost: 130, kind: 'ground',  range: 0.33, damage: 9,  cooldown: 0.14, desc: '超高射速·割草基干' },
+  { key: 'plasma',    name: '等离子灼烧', sub: 'PLASMA', icon: '✺', cost: 180, kind: 'ground', range: 0.24, damage: 8,  cooldown: 0.22, desc: '持续灼烧射程内全部敌人' },
 ];
 
 const OCEAN_PLATFORM_COST = 60;   // 海上浮动平台附加费
@@ -48,6 +50,7 @@ const GROUND_DEFS: Record<string, GroundDef> = {
   armored:   { hp: 150, speed: 0.04,  armor: 8, reward: 20, size: 0.03 },
   splitter:  { hp: 55,  speed: 0.06,  armor: 0, reward: 9,  size: 0.023 },  // 死后裂变
   swarmling: { hp: 16,  speed: 0.09,  armor: 0, reward: 3,  size: 0.012 }, // 裂变产物
+  crawler:   { hp: 12,  speed: 0.052, armor: 0, reward: 2,  size: 0.014 }, // 爬行者：纯数量的尸潮单位
 };
 
 // 全局刷怪倍率：拉长每艘运输舰的倾泻时间，堆战场密度
@@ -176,6 +179,9 @@ export class Game {
   satellites: Satellite[] = [];
   private unitPools!: Record<string, InstancePool>;
   private wingPool!: InstancePool;
+  // 连杀：短窗口内的连续击杀计数（割草反馈）
+  private streak = 0;
+  private streakT = 0;
 
   cities: City[] = [];
   towers: Tower[] = [];
@@ -207,6 +213,7 @@ export class Game {
       armored: new InstancePool(this.root, new THREE.OctahedronGeometry(D.armored.size), '#c22343', 384),
       splitter: new InstancePool(this.root, new THREE.IcosahedronGeometry(D.splitter.size, 0), COL_ROSE, 384),
       swarmling: new InstancePool(this.root, new THREE.TetrahedronGeometry(D.swarmling.size), COL_ROSE, 512),
+      crawler: new InstancePool(this.root, new THREE.BoxGeometry(D.crawler.size, D.crawler.size * 0.55, D.crawler.size), COL_ROSE, 640),
     };
     this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 256);
     this.spawnCities();
@@ -248,13 +255,15 @@ export class Game {
   private waveAt(i: number): WaveCfg {
     if (!this.cfg.endless) return this.cfg.waves[i];
     // 前 3~4 波是热身，之后陡增；后期数量不设上限
-    const types = ['swarm', 'runner', 'armored', 'splitter'] as const;
+    const types = ['swarm', 'crawler', 'runner', 'armored', 'splitter'] as const;
     const drops: WaveCfg['drops'] = [];
     const nDrops = Math.min(1 + Math.floor(i / 2), 6);   // 波0 单舱起步
     for (let d = 0; d < nDrops; d++) {
       const type = types[(i + d * 2) % types.length];
       const base = 5 + i * 1.5;
-      drops.push({ type, n: Math.round(type === 'armored' ? base * 0.5 : base) });
+      // 爬行者是纯数量单位，双倍装载
+      const n = type === 'armored' ? base * 0.5 : type === 'crawler' ? base * 2 : base;
+      drops.push({ type, n: Math.round(n) });
     }
     return {
       prewave: i === 0 ? 20 : Math.max(13, 24 - i * 0.5),
@@ -727,6 +736,37 @@ export class Game {
         bob.push({ obj: orb, base: 0.072, amp: 0.005, freq: 3.1 });
         break;
       }
+      case 'gatling': {
+        // 矮壮基座 + 三联旋转枪管束
+        addPart(new THREE.CylinderGeometry(0.014, 0.018, 0.03, 6), 0.015);
+        const barrels = new THREE.Group();
+        for (let i = 0; i < 3; i++) {
+          const b = new THREE.Mesh(new THREE.CylinderGeometry(0.0035, 0.0035, 0.05, 5), fill);
+          const be = new THREE.LineSegments(new THREE.EdgesGeometry(b.geometry), edgeM);
+          const a2 = (i / 3) * Math.PI * 2;
+          b.position.set(Math.cos(a2) * 0.007, 0, Math.sin(a2) * 0.007);
+          be.position.copy(b.position);
+          barrels.add(b); barrels.add(be); edges.push(be);
+        }
+        barrels.position.y = 0.055;
+        group.add(barrels);
+        spin.push({ obj: barrels, axis: 'y', speed: 6 }); // 枪管束高速旋转 = 割草气质
+        ring = mkRing(0.013, 0.032);
+        break;
+      }
+      case 'plasma': {
+        // 蹲式熔炉：宽罐体 + 琥珀熔芯 + 顶部喷口
+        addPart(new THREE.CylinderGeometry(0.017, 0.021, 0.034, 8), 0.017);
+        const core = new THREE.Mesh(new THREE.SphereGeometry(0.011, 10, 10),
+          new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }));
+        core.position.y = 0.042;
+        group.add(core);
+        group.userData.muzzle = core;
+        bob.push({ obj: core, base: 0.042, amp: 0.004, freq: 4.2 });
+        addPart(new THREE.ConeGeometry(0.009, 0.02, 6), 0.06);
+        ring = mkRing(0.019, 0.012);
+        break;
+      }
       case 'laser': {
         // 对空炮台：宽基座 + 长炮管 + 三片散热鳍 + 高速自旋晶体
         addPart(new THREE.CylinderGeometry(0.016, 0.02, 0.018, 6), 0.009);
@@ -840,6 +880,12 @@ export class Game {
     this.battleTime += dt;
 
     this.energy += this.incomeRate() * dt;
+
+    // 连杀窗口衰减
+    if (this.streakT > 0) {
+      this.streakT -= dt;
+      if (this.streakT <= 0) this.streak = 0;
+    }
 
     // 连续进攻调度：倒计时到点就发起下一波，不等上一波清完
     if (this.launched < this.totalWaves()) {
@@ -1401,6 +1447,7 @@ export class Game {
       // 蜂群算击杀（割草），不算拦截
       o.alive = false;
       this.stats.kills++;
+      this.registerKill();
       this.energy += WING_REWARD;
       sfx.play('explosion', 130);
       this.spawnRing(o.pos.clone(), COL_CYAN, 0.03);
@@ -1478,12 +1525,23 @@ export class Game {
     this.units = this.units.filter((u) => u.alive);
   }
 
+  /** 连杀登记：2.5s 内持续击杀累积，每满 25 连杀返能量 */
+  private registerKill() {
+    this.streak++;
+    this.streakT = 2.5;
+    if (this.streak > 0 && this.streak % 25 === 0) {
+      this.energy += 15;
+      sfx.play('upgrade', 300);
+    }
+  }
+
   private killUnit(u: Unit, reward: boolean) {
     u.alive = false;
     this.spawnRing(u.pos.clone(), reward ? COL_CYAN : COL_ROSE, 0.045);
     if (reward) {
       this.energy += u.def.reward;
       this.stats.kills++;
+      this.registerKill();
       sfx.play('explosion', 90);
       // 裂变体：死后分裂出两只小蜂群继续扑城
       if (u.type === 'splitter') {
@@ -1624,7 +1682,31 @@ export class Game {
         continue;
       }
 
-      // pulse / prism：对地
+      if (tw.def.key === 'plasma') {
+        // 等离子灼烧：射程内全体持续掉血，天生的尸潮克星
+        tw.cooldown = tw.def.cooldown;
+        const dmg = this.towerDamage(tw);
+        let hits = 0;
+        let nearest: Unit | null = null; let nd = Infinity;
+        for (const u of this.units) {
+          if (!u.alive) continue;
+          const d = towerN.angleTo(u.pos);
+          if (d > range) continue;
+          u.hp -= Math.max(1, dmg - u.def.armor * 0.5);
+          if (u.hp <= 0) this.killUnit(u, true);
+          hits++;
+          if (d < nd) { nd = d; nearest = u; }
+        }
+        if (hits > 0) {
+          const from = towerN.clone().multiplyScalar(towerH + 0.045);
+          if (nearest) this.spawnBeam(from, nearest.pos.clone(), 0.004, COL_AMBER);
+          this.spawnFlash(from, COL_AMBER, 0.01, 0.16);
+          sfx.play('arc', 300);
+        }
+        continue;
+      }
+
+      // pulse / gatling / prism：对地单体
       let target: Unit | null = null;
       let bestProgress = -1;
       for (const u of this.units) {
@@ -1975,6 +2057,15 @@ export class Game {
   // ============ HUD ============
 
   private updateHud() {
+    // 连杀显示：8 连杀起显，刚击杀时放大回弹
+    const streakEl = document.getElementById('streak')!;
+    if (this.streak >= 8) {
+      streakEl.classList.add('show');
+      streakEl.innerHTML = `<span class="lab">连杀 STREAK</span>x${this.streak}`;
+      streakEl.style.transform = `scale(${(1 + Math.max(0, this.streakT - 2.2) * 1.1).toFixed(3)})`;
+    } else {
+      streakEl.classList.remove('show');
+    }
     document.getElementById('energy-val')!.textContent = Math.floor(this.energy).toString();
     document.getElementById('income-val')!.textContent = `+${this.incomeRate().toFixed(1)}/s`;
     const mul = this.cityNetworkMul();
