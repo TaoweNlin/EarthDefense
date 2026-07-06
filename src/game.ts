@@ -66,11 +66,11 @@ const BEHEMOTH_CITY_DAMAGE = 30; // 无塔可拆时才去撞城
 const HORDE_MUL = 1.5;
 
 // 空中单位（立体防御的主角，只能被防空火力击落）
-const WING_HP = 14;            // 飞行蜂群：极脆、极多，给防空当割草靶
-const WING_REWARD = 4;
+const WING_HP = 9;             // 飞行蜂群：极脆、海量，给全防线当割草靶
+const WING_REWARD = 1;
 const WING_SPEED = 0.055;      // 角速度 rad/s，缓慢推进
 const WING_ALT = 1.18;         // 巡航高度：拉高一点，空层视觉更分明
-const WING_IMPACT_DAMAGE = 2;
+const WING_IMPACT_DAMAGE = 1;
 const DIVER_HP = 60;
 const DIVER_REWARD = 22;
 const DIVER_IMPACT_DAMAGE = 20;   // 撞击城市伤害
@@ -94,7 +94,7 @@ const BOSS_DROP_INTERVAL = 11;
 // ========== 关卡通用 ==========
 
 const CITY_HP = 100;
-const CITY_INCOME = 1.6;
+const CITY_INCOME = 2.0; // 发育节奏：更宽裕的基础经济
 const CITY_HIT_DAMAGE = 8; // 割草量级下单只渗透伤害调低
 const CITY_NAMES = ['NOVA-1', 'KIRIN-2', 'AURUM-3', 'TERRA-4', 'ZENIT-5', 'HALO-6'];
 
@@ -166,9 +166,14 @@ type OrbitalKind = 'transport' | 'jammer' | 'boss' | 'diver' | 'gunship' | 'wing
 const HIVE_RADIUS = 2.1;
 const HIVE_HP = 850;
 const HIVE_REWARD = 130;
-const HIVE_SQUAD_INTERVAL = 5.5; // 每批虫群间隔
-const HIVE_SQUAD_SIZE = 11;      // 每批数量
-const WING_CAP = 450;            // 全场蜂群上限（性能保险丝）
+// 蜂群位置计算的复用临时向量（海量蜂群下避免每帧分配）
+const _wDir = new THREE.Vector3();
+const _wAxis = new THREE.Vector3();
+const _wSide = new THREE.Vector3();
+
+const HIVE_SQUAD_INTERVAL = 4.2; // 每批虫群间隔
+const HIVE_SQUAD_SIZE = 32;      // 每批数量
+const WING_CAP = 900;            // 全场蜂群上限（性能保险丝）
 interface Orbital {
   kind: OrbitalKind; hp: number; maxHp: number; alive: boolean;
   group: THREE.Group; pos: THREE.Vector3;
@@ -245,7 +250,7 @@ export class Game {
       behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
       shrieker: new InstancePool(this.root, new THREE.ConeGeometry(D.shrieker.size * 0.8, D.shrieker.size * 2.4, 5), '#ff4d7d', 128),
     };
-    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 512);
+    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 1024);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
@@ -310,12 +315,12 @@ export class Game {
       drops[0] = { ...drops[0], heavy: true };
     }
     return {
-      prewave: tide ? 30 : i === 0 ? 20 : Math.max(13, 24 - i * 0.5),
+      prewave: tide ? 40 : i === 0 ? 28 : Math.max(18, 30 - i * 0.5),
       drops,
       jammers: i >= 4 ? Math.min(4, Math.floor(i / 4)) : 0,
       divers: (i >= 4 ? Math.floor((i - 2) / 2) : 0) * tideMul,
       gunships: (i >= 6 ? Math.floor((i - 3) / 3) : 0) * tideMul,
-      wings: (i >= 3 ? Math.round(4 + (i - 2) * 2.2) : 0) * tideMul,
+      wings: (i >= 3 ? Math.round(40 + (i - 2) * 20) : 0) * tideMul,
       hives: tide && i >= 9 ? Math.min(3, Math.floor(i / 10)) : (i >= 13 && i % 6 === 5 ? 1 : 0),
       boss: i > 0 && i % 8 === 7, // 每 8 波一艘母舰
       tide,
@@ -1455,12 +1460,19 @@ export class Game {
     const e1 = new THREE.Vector3().crossVectors(startBase, ref).normalize();
     const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
 
+    // 海量蜂群按多纵队推进：每 22 只一列，各列独立抖动、错峰进场
+    const COL_SIZE = 22;
+    let colE1 = 0, colE2 = 0;
     for (let i = 0; i < count; i++) {
-      // 编队横向抖动
-      const spread = (this.rand() - 0.5) * 0.22;
-      const spread2 = (this.rand() - 0.5) * 0.22;
+      const col = Math.floor(i / COL_SIZE);
+      if (i % COL_SIZE === 0) {
+        colE1 = (this.rand() - 0.5) * 0.5;
+        colE2 = (this.rand() - 0.5) * 0.5;
+      }
+      const spread = colE1 + (this.rand() - 0.5) * 0.18;
+      const spread2 = colE2 + (this.rand() - 0.5) * 0.18;
       const dir = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
-      this.spawnWingUnit(dir, city.cellId, WING_ALT, i * 0.055);
+      this.spawnWingUnit(dir, city.cellId, WING_ALT, (i % COL_SIZE) * 0.045 + col * 0.12);
     }
   }
 
@@ -1606,17 +1618,17 @@ export class Game {
         const dive = Math.min(1, k * 1.6);
         const baseAlt = startR + (WING_ALT - startR) * (1 - (1 - dive) * (1 - dive));
         const alt = baseAlt + 0.008 * Math.sin(this.time * 3 + o.landCell + o.orbitAngle * 37);
-        const dir = o.basisN.clone().lerp(o.basisU, k).normalize();
-        o.group.position.copy(dir.multiplyScalar(alt));
+        _wDir.copy(o.basisN).lerp(o.basisU, k).normalize();
+        o.group.position.copy(_wDir).multiplyScalar(alt);
         // 虫巢流的立体螺旋队形：绕飞行走廊盘旋，越接近目标越收束
         if (startR > WING_ALT + 0.05) {
-          const axis = new THREE.Vector3().crossVectors(o.basisN, o.basisU).normalize();
-          const side = new THREE.Vector3().crossVectors(dir, axis).normalize();
+          _wAxis.crossVectors(o.basisN, o.basisU).normalize();
+          _wSide.crossVectors(_wDir, _wAxis).normalize();
           const ph = o.deployTimer + k * 9;
           const amp = 0.07 * (1 - k);
           o.group.position
-            .addScaledVector(axis, Math.cos(ph) * amp)
-            .addScaledVector(side, Math.sin(ph) * amp);
+            .addScaledVector(_wAxis, Math.cos(ph) * amp)
+            .addScaledVector(_wSide, Math.sin(ph) * amp);
         }
         if (k >= 1) {
           // 抵达城市上空：自杀式冲撞
@@ -1644,10 +1656,11 @@ export class Game {
               const city = targets[Math.floor(this.rand() * targets.length)];
               for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
                 const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
-                  .multiplyScalar(0.14);
+                  .multiplyScalar(0.16);
+                // 8 只一组的子纵队，涌出而非排队
                 this.spawnWingUnit(
                   o.orbitAxis.clone().add(jitter).normalize(), city.cellId,
-                  HIVE_RADIUS, w * 0.035);
+                  HIVE_RADIUS, (w % 8) * 0.04 + Math.floor(w / 8) * 0.11);
               }
               this.spawnRing(o.group.position.clone(), COL_ROSE, 0.12);
               sfx.play('jam', 400);
@@ -1756,6 +1769,9 @@ export class Game {
       }
       o.pos.copy(o.group.position);
     }
+    // 清理已终结的轨道单位（海量蜂群下数组会无限增长）
+    this.orbitals = this.orbitals.filter((o) =>
+      !(o.phase === 'done' && (o.kind === 'transport' || !o.alive)));
   }
 
   private bossDrop(boss: Orbital) {
