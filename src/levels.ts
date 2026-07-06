@@ -6,12 +6,13 @@
 
 export interface WaveCfg {
   prewave: number;  // 距上一波发起的秒数（首波 = 开局布防时间）
-  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter' | 'crawler'; n: number }[];
+  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter' | 'crawler' | 'behemoth'; n: number }[];
   jammers?: number;
   divers?: number;    // 俯冲艇：不登陆，直接俯冲撞击城市
   gunships?: number;  // 炮舰：悬停在城市上空持续轰炸，只能防空打
   wings?: number;     // 飞行蜂群：成编队低空推进，防空割草靶
   boss?: boolean;
+  tide?: boolean;     // 飞船潮：全向多波高潮，警报 + 红色天幕
 }
 
 export type CityLayout = 'cluster' | 'equator' | 'capital' | 'global';

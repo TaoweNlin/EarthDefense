@@ -633,10 +633,12 @@ function refreshTowerPanel() {
   const dmg = Math.round(game.towerDamage(tower));
   const range = game.towerRange(tower).toFixed(2);
   const perkLine = tower.perk ? `<br><span style="color:var(--amber)">◆ ${tower.perk.name}</span>` : '';
+  const hpColor = tower.hp < tower.maxHp * 0.4 ? 'var(--rose)' : 'var(--cyan)';
+  const hpLine = `<br>结构 <b style="color:${hpColor}">${Math.ceil(tower.hp)}/${tower.maxHp}</b>`;
   document.getElementById('tw-stats')!.innerHTML =
     (tower.def.damage > 0
       ? `伤害 <b>${dmg}</b> · 射程 <b>${range}</b><br>${tower.def.desc}`
-      : `射程 <b>${range}</b><br>${tower.def.desc}`) + perkLine;
+      : `射程 <b>${range}</b><br>${tower.def.desc}`) + hpLine + perkLine;
   const upBtn = document.getElementById('tw-upgrade') as HTMLButtonElement;
   const maxed = tower.level >= 3;
   upBtn.disabled = maxed || game.energy < game.upgradeCost(tower);

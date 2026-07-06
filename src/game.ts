@@ -51,7 +51,11 @@ const GROUND_DEFS: Record<string, GroundDef> = {
   splitter:  { hp: 55,  speed: 0.06,  armor: 0, reward: 9,  size: 0.023 },  // 死后裂变
   swarmling: { hp: 16,  speed: 0.09,  armor: 0, reward: 3,  size: 0.012 }, // 裂变产物
   crawler:   { hp: 12,  speed: 0.052, armor: 0, reward: 2,  size: 0.014 }, // 爬行者：纯数量的尸潮单位
+  behemoth:  { hp: 550, speed: 0.026, armor: 10, reward: 55, size: 0.042 }, // 攻城巨兽：无视城市，专拆防御塔
 };
+const BEHEMOTH_DPS_INTERVAL = 1.2;
+const BEHEMOTH_HIT = 28;
+const BEHEMOTH_CITY_DAMAGE = 30; // 无塔可拆时才去撞城
 
 // 全局刷怪倍率：拉长每艘运输舰的倾泻时间，堆战场密度
 const HORDE_MUL = 1.5;
@@ -122,10 +126,13 @@ export interface Tower {
   perk: Perk | null;
   group: THREE.Group; ring: THREE.Mesh | null; edges: THREE.LineSegments[];
   cooldown: number;
+  hp: number; maxHp: number; // 结构值：攻城巨兽可拆塔
   // 轨道激光的锁定状态
   lockTarget: Orbital | null; lockT: number; beam: THREE.Mesh | null;
   jammed: boolean;
 }
+const TOWER_HP = 100;
+const TOWER_HP_PER_LEVEL = 60;
 
 interface Unit {
   type: string; def: GroundDef;
@@ -134,6 +141,8 @@ interface Unit {
   offset: THREE.Vector3;  // 横向散布：避免同舱单位叠成一条线
   speedMul: number;       // 个体速度抖动
   spin: number;           // 自旋相位（实例化渲染用）
+  targetTower: number;    // 攻城巨兽当前目标塔的格子 id（-1 = 无/走向城市）
+  attackT: number;        // 拆塔攻击间隔计时
 }
 
 interface Satellite {
@@ -214,6 +223,7 @@ export class Game {
       splitter: new InstancePool(this.root, new THREE.IcosahedronGeometry(D.splitter.size, 0), COL_ROSE, 384),
       swarmling: new InstancePool(this.root, new THREE.TetrahedronGeometry(D.swarmling.size), COL_ROSE, 512),
       crawler: new InstancePool(this.root, new THREE.BoxGeometry(D.crawler.size, D.crawler.size * 0.55, D.crawler.size), COL_ROSE, 640),
+      behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
     };
     this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 256);
     this.spawnCities();
@@ -256,23 +266,30 @@ export class Game {
     if (!this.cfg.endless) return this.cfg.waves[i];
     // 前 3~4 波是热身，之后陡增；后期数量不设上限
     const types = ['swarm', 'crawler', 'runner', 'armored', 'splitter'] as const;
+    const tide = i > 0 && (i + 1) % 10 === 0; // 每 10 波一次飞船潮
     const drops: WaveCfg['drops'] = [];
     const nDrops = Math.min(1 + Math.floor(i / 2), 6);   // 波0 单舱起步
+    const tideMul = tide ? 2 : 1;
     for (let d = 0; d < nDrops; d++) {
       const type = types[(i + d * 2) % types.length];
       const base = 5 + i * 1.5;
       // 爬行者是纯数量单位，双倍装载
-      const n = type === 'armored' ? base * 0.5 : type === 'crawler' ? base * 2 : base;
+      const n = (type === 'armored' ? base * 0.5 : type === 'crawler' ? base * 2 : base) * tideMul;
       drops.push({ type, n: Math.round(n) });
     }
+    // 攻城巨兽：波 10 起零星出现，飞船潮必带
+    if (i >= 9 && (tide || i % 5 === 4)) {
+      drops.push({ type: 'behemoth', n: Math.max(1, Math.ceil((i - 8) / 6)) * (tide ? 2 : 1) });
+    }
     return {
-      prewave: i === 0 ? 20 : Math.max(13, 24 - i * 0.5),
+      prewave: tide ? 30 : i === 0 ? 20 : Math.max(13, 24 - i * 0.5),
       drops,
       jammers: i >= 4 ? Math.min(4, Math.floor(i / 4)) : 0,
-      divers: i >= 4 ? Math.floor((i - 2) / 2) : 0,       // 波20 = 9 艘
-      gunships: i >= 6 ? Math.floor((i - 3) / 3) : 0,     // 波20 = 5 艘
-      wings: i >= 3 ? Math.round(4 + (i - 2) * 2.2) : 0,  // 波3 = 6 只，波20 = 44 只
+      divers: (i >= 4 ? Math.floor((i - 2) / 2) : 0) * tideMul,
+      gunships: (i >= 6 ? Math.floor((i - 3) / 3) : 0) * tideMul,
+      wings: (i >= 3 ? Math.round(4 + (i - 2) * 2.2) : 0) * tideMul,
       boss: i > 0 && i % 8 === 7, // 每 8 波一艘母舰
+      tide,
     };
   }
 
@@ -539,7 +556,8 @@ export class Game {
       def, level: 1, cellId, invested: check.cost, perk,
       group, ring: (group.userData.ring as THREE.Mesh) ?? null,
       edges: group.userData.edges as THREE.LineSegments[],
-      cooldown: 0, lockTarget: null, lockT: 0, beam: null, jammed: false,
+      cooldown: 0, hp: TOWER_HP, maxHp: TOWER_HP,
+      lockTarget: null, lockT: 0, beam: null, jammed: false,
     });
     if (def.key === 'satellite') this.spawnSatellite(cellId);
     sfx.play('build');
@@ -618,6 +636,8 @@ export class Game {
     this.energy -= cost;
     t.invested += cost;
     t.level++;
+    t.maxHp += TOWER_HP_PER_LEVEL;
+    t.hp = t.maxHp; // 升级同时修复结构
     // 等级视觉：基座加一圈发光环
     const lvRing = new THREE.Mesh(
       new THREE.TorusGeometry(0.024 + t.level * 0.004, 0.0016, 6, 24),
@@ -628,6 +648,33 @@ export class Game {
     this.spawnRing(this.grid.cells[cellId].center.clone().multiplyScalar(1.01), COL_AMBER, 0.05);
     this.updateHud();
     return true;
+  }
+
+  /** 防御塔被攻城单位摧毁：无返还、留下击毁演出 */
+  damageTower(t: Tower, dmg: number) {
+    t.hp -= dmg;
+    if (t.hp > 0) return;
+    const cellId = t.cellId;
+    const idx = this.towers.indexOf(t);
+    if (idx < 0) return;
+    if (t.def.key === 'satellite') {
+      const si = this.satellites.findIndex((s) => s.towerCell === cellId);
+      if (si >= 0) {
+        this.root.remove(this.satellites[si].group);
+        this.root.remove(this.satellites[si].line);
+        this.satellites.splice(si, 1);
+      }
+    }
+    if (t.beam) this.root.remove(t.beam);
+    this.root.remove(t.group);
+    this.occupied.delete(cellId);
+    this.towers.splice(idx, 1);
+    const p = this.grid.cells[cellId].center.clone().multiplyScalar(1.01);
+    this.spawnRing(p, COL_ROSE, 0.07);
+    this.spawnFlash(p, COL_ROSE, 0.02, 0.3);
+    sfx.play('explosion', 0);
+    this.banner('防御塔被摧毁', 'TOWER LOST // 攻城巨兽正在拆毁防线', false, 2400);
+    this.updateHud();
   }
 
   sell(cellId: number) {
@@ -984,11 +1031,24 @@ export class Game {
 
   private launchWave() {
     this.phase = 'active';
-    if (!this.pending.length) this.prepareLandings();
-    sfx.play('alarm');
-    this.banner(`WAVE ${this.launched + 1}`, '敌袭 // HOSTILE INBOUND', false, 2600);
-
     const cfg = this.waveAt(this.launched);
+    if (this.pending.length < cfg.drops.length) {
+      // 预告与实际波次不符（防御性）：清掉旧航迹重新准备
+      for (const p of this.pending) this.root.remove(p.trail);
+      this.prepareLandings();
+    }
+    sfx.play('alarm');
+    if (cfg.tide) {
+      // 飞船潮：大警报 + 红色天幕脉冲
+      this.banner('飞船潮来袭', `SHIP TIDE // WAVE ${this.launched + 1} 全方向进攻`, false, 4000);
+      sfx.play('alarm', 0);
+      const flash = document.getElementById('tide-flash')!;
+      flash.classList.remove('go');
+      void flash.offsetWidth; // 重启 CSS 动画
+      flash.classList.add('go');
+    } else {
+      this.banner(`WAVE ${this.launched + 1}`, '敌袭 // HOSTILE INBOUND', false, 2600);
+    }
     cfg.drops.forEach((drop, i) => {
       const p = this.pending[i];
       const cargo = { type: drop.type, n: Math.round(drop.n * HORDE_MUL) };
@@ -1485,7 +1545,33 @@ export class Game {
       alive: true, pos,
       slowUntilFrame: false, offset, speedMul: 0.85 + this.rand() * 0.3,
       spin: this.rand() * Math.PI * 2,
+      targetTower: -1, attackT: 0,
     });
+    // 攻城巨兽落地即锁定最近的防御塔
+    if (type === 'behemoth') this.retargetBehemoth(this.units[this.units.length - 1]);
+  }
+
+  /** 巨兽选取最近的塔并重新寻路；无塔时退化为走向城市 */
+  private retargetBehemoth(u: Unit) {
+    const from = u.path[Math.min(u.seg, u.path.length - 1)];
+    let best = -1, bestD = Infinity;
+    const fromDir = this.grid.cells[from].center;
+    for (const t of this.towers) {
+      const d = this.grid.cells[t.cellId].center.angleTo(fromDir);
+      if (d < bestD) { bestD = d; best = t.cellId; }
+    }
+    if (best >= 0) {
+      const p = this.bfsPath(from, new Set([best]), true) ?? this.bfsPath(from, new Set([best]), false);
+      if (p && p.length >= 2) {
+        if (p.length > 2) p.pop(); // 停在塔的相邻格围攻，不与塔重叠
+        u.path = p; u.seg = 0; u.t = 0; u.targetTower = best;
+        return;
+      }
+    }
+    u.targetTower = -1;
+    const cp = this.findPath(from);
+    if (cp && cp.length >= 2) { u.path = cp; u.seg = 0; u.t = 0; }
+    else this.killUnit(u, false);
   }
 
   private updateUnits(dt: number) {
@@ -1493,6 +1579,22 @@ export class Game {
     const teslas = this.towers.filter((t) => t.def.key === 'tesla' && !t.jammed);
     for (const u of this.units) {
       if (!u.alive) continue;
+
+      // 攻城巨兽围攻中：驻停拆塔，不再移动
+      if (u.type === 'behemoth' && u.targetTower >= 0 && u.seg >= u.path.length - 1) {
+        const tw = this.towerAt(u.targetTower);
+        if (!tw) { this.retargetBehemoth(u); continue; }
+        u.attackT -= dt;
+        if (u.attackT <= 0) {
+          u.attackT = BEHEMOTH_DPS_INTERVAL;
+          const tp = this.grid.cells[tw.cellId].center.clone().multiplyScalar(1.03);
+          this.fireLine(u.pos.clone(), tp, 0.22, COL_ROSE);
+          this.spawnFlash(tp, COL_ROSE, 0.014, 0.2);
+          this.damageTower(tw, BEHEMOTH_HIT);
+        }
+        continue;
+      }
+
       let speed = u.def.speed * u.speedMul;
       for (const ts of teslas) {
         if (this.grid.cells[ts.cellId].center.angleTo(u.pos) < this.towerRange(ts)) {
@@ -1509,15 +1611,24 @@ export class Game {
         u.seg++;
         u.t = 0;
         if (u.seg >= u.path.length - 1) {
-          this.hitCity(u.path[u.path.length - 1]);
+          if (u.type === 'behemoth' && u.targetTower >= 0 && this.towerAt(u.targetTower)) {
+            continue; // 抵达围攻位，下一帧进入拆塔状态
+          }
+          this.hitCity(u.path[u.path.length - 1],
+            u.type === 'behemoth' ? BEHEMOTH_CITY_DAMAGE : CITY_HIT_DAMAGE);
           this.killUnit(u, false);
           continue;
         }
-        const targetCity = this.cities.find((c) => c.cellId === u.path[u.path.length - 1]);
-        if (!targetCity || !targetCity.alive) {
-          const np = this.findPath(u.path[u.seg]);
-          if (np && np.length >= 2) { u.path = np; u.seg = 0; u.t = 0; }
-          else { this.killUnit(u, false); continue; }
+        if (u.type === 'behemoth' && u.targetTower >= 0) {
+          // 目标塔中途被卖/被拆则重新索敌
+          if (!this.towerAt(u.targetTower)) { this.retargetBehemoth(u); continue; }
+        } else {
+          const targetCity = this.cities.find((c) => c.cellId === u.path[u.path.length - 1]);
+          if (!targetCity || !targetCity.alive) {
+            const np = this.findPath(u.path[u.seg]);
+            if (np && np.length >= 2) { u.path = np; u.seg = 0; u.t = 0; }
+            else { this.killUnit(u, false); continue; }
+          }
         }
       }
       u.pos.copy(from).lerp(to, u.t).add(u.offset).normalize().multiplyScalar(1.02);
@@ -2085,6 +2196,18 @@ export class Game {
     document.getElementById('wave-val')!.textContent = this.cfg.endless
       ? `${this.launched + 1}/∞`
       : `${Math.min(this.launched + 1, this.cfg.waves.length)}/${this.cfg.waves.length}`;
+    // 末日时钟：距下一次飞船潮的波数
+    const clock = document.getElementById('tide-clock')!;
+    let next = -1;
+    const horizon = this.cfg.endless ? this.launched + 30 : this.cfg.waves.length;
+    for (let i = this.launched; i < horizon; i++) {
+      const w = this.waveAt(i);
+      if (w?.tide) { next = i; break; }
+    }
+    if (next < 0) { clock.textContent = ''; return; }
+    const away = next - this.launched;
+    clock.textContent = away <= 0 ? '⚠ 飞船潮即将来袭' : `飞船潮 · ${away} 波后`;
+    clock.classList.toggle('soon', away <= 1);
   }
 
   private showCountdown(show: boolean) {

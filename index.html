@@ -96,6 +96,22 @@
       display: flex; gap: 10px; align-items: flex-end; pointer-events: auto;
     }
 
+    /* ===== 飞船潮 ===== */
+    #tide-clock { color: rgba(244, 63, 94, 0.7); }
+    #tide-clock.soon { color: var(--rose); text-shadow: 0 0 10px rgba(244, 63, 94, 0.6); }
+    #tide-flash {
+      position: fixed; inset: 0; z-index: 8; pointer-events: none; opacity: 0;
+      background: radial-gradient(ellipse at center, transparent 40%, rgba(244, 63, 94, 0.28));
+    }
+    #tide-flash.go { animation: tideFlash 3.2s ease-out; }
+    @keyframes tideFlash {
+      0% { opacity: 0; }
+      12% { opacity: 1; }
+      30% { opacity: 0.35; }
+      45% { opacity: 0.85; }
+      100% { opacity: 0; }
+    }
+
     /* ===== 连杀计数 ===== */
     #streak {
       position: fixed; right: 64px; top: 40%; z-index: 11;
@@ -353,6 +369,7 @@
     <div class="panel res-box">
       <div class="p-label">波次 WAVE</div>
       <div class="res-val" id="wave-val">—</div>
+      <div class="res-sub" id="tide-clock"></div>
     </div>
   </div>
 
@@ -419,6 +436,7 @@
   <button id="mute-btn" title="[M] 静音">♪</button>
   <button id="speed-btn" title="[F] 倍速">1×</button>
   <div id="streak"></div>
+  <div id="tide-flash"></div>
 
   <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1-9] 选塔 · 点塔查看/升级 · [空格] 暂停 · [F] 倍速</div>
 
