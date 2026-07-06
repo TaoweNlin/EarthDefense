@@ -43,7 +43,7 @@ const T4 = ['pulse', 'tesla', 'laser', 'radar', 'missile'];
 const T5 = ['pulse', 'tesla', 'laser', 'radar', 'missile', 'prism', 'gatling'];
 const T7 = ['pulse', 'tesla', 'laser', 'radar', 'missile', 'prism', 'satellite', 'gatling', 'plasma'];
 const T8 = [...T7, 'reactor'];             // 章节二起步：+经济塔
-const T9 = [...T8, 'railgun'];             // 章节二后期：+轨道重炮
+const T9 = [...T8, 'station'];             // 章节二后期：+轨道空间站
 
 export const LEVELS: LevelCfg[] = [
   {
@@ -195,7 +195,7 @@ export const LEVELS: LevelCfg[] = [
   },
   {
     id: 12, chapter: 2, name: '天空撕裂', sub: 'TORN SKY',
-    flavor: '这次的潮汐来自天上。轨道重炮已解锁——让它们尝尝天罚。', objective: '空中割草 · 天幕不能失守',
+    flavor: '这次的潮汐来自天上。轨道空间站已解锁——把战争带回它们的高度。', objective: '空中割草 · 天幕不能失守',
     seed: 84147098, cities: 2, cityLayout: 'cluster', cityCluster: 0.85,
     landingSpread: 1.5, lanes: 3, startEnergy: 420, towers: T9,
     waves: [

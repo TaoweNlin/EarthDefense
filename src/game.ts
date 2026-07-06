@@ -33,7 +33,7 @@ export const TOWER_DEFS: TowerDef[] = [
   { key: 'gatling',   name: '加特林',   sub: 'GATLING', icon: '≡', cost: 130, kind: 'ground',  range: 0.33, damage: 9,  cooldown: 0.14, desc: '超高射速·割草基干' },
   { key: 'plasma',    name: '等离子灼烧', sub: 'PLASMA', icon: '✺', cost: 180, kind: 'ground', range: 0.24, damage: 8,  cooldown: 0.22, desc: '持续灼烧射程内全部敌人' },
   { key: 'reactor',   name: '能源反应堆', sub: 'REACTOR', icon: '⌬', cost: 150, kind: 'support', range: 0, damage: 0, cooldown: 0,   desc: '+2.5⚡/s·用地换经济' },
-  { key: 'railgun',   name: '轨道重炮', sub: 'RAILGUN', icon: '✛', cost: 320, kind: 'ground',  range: 0.9,  damage: 95, cooldown: 8,   desc: '全球压制·天降光柱轰击敌群' },
+  { key: 'station',   name: '轨道空间站', sub: 'ORBITAL STN', icon: '❂', cost: 350, kind: 'air', range: 0.45, damage: 80, cooldown: 3, desc: '部署环球空间站·轰炸轨迹下方敌群' },
 ];
 
 const OCEAN_PLATFORM_COST = 60;   // 海上浮动平台附加费
@@ -154,7 +154,12 @@ interface Unit {
 interface Satellite {
   towerCell: number; group: THREE.Group; line: THREE.Line;
   e1: THREE.Vector3; e2: THREE.Vector3; angle: number; cooldown: number;
+  station: boolean; // true = 轨道空间站（对地轨道轰炸），false = 防御卫星（对空）
 }
+const STATION_RADIUS = 1.5;
+const STATION_SPEED = 0.3;      // 角速度 rad/s，约 21s 一圈
+const STATION_FOOTPRINT = 0.45; // 星下点覆盖半径（球面角）
+const STATION_AOE = 0.09;
 
 type OrbitalKind = 'transport' | 'jammer' | 'boss' | 'diver' | 'gunship' | 'wing';
 interface Orbital {
@@ -571,6 +576,7 @@ export class Game {
       lockTarget: null, lockT: 0, beam: null, jammed: false,
     });
     if (def.key === 'satellite') this.spawnSatellite(cellId);
+    if (def.key === 'station') this.spawnStation(cellId);
     sfx.play('build');
     this.updateHud();
     return true;
@@ -603,11 +609,51 @@ export class Game {
     group.add(core);
     this.root.add(group);
 
-    this.satellites.push({ towerCell: cellId, group, line, e1: n, e2: u, angle: 0, cooldown: 0 });
+    this.satellites.push({ towerCell: cellId, group, line, e1: n, e2: u, angle: 0, cooldown: 0, station: false });
+  }
+
+  /** 轨道空间站：大型环球作战平台，轨道经过建造点，轰炸星下点附近的地面敌群 */
+  private spawnStation(cellId: number) {
+    const n = this.grid.cells[cellId].center.clone();
+    const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const u = new THREE.Vector3().crossVectors(n, ref).normalize()
+      .applyAxisAngle(n, this.rand() * Math.PI * 2);
+    const axis = new THREE.Vector3().crossVectors(n, u).normalize();
+    const line = this.makeOrbitLine(axis, STATION_RADIUS, 0.45, COL_CYAN);
+
+    const group = new THREE.Group();
+    // 主环
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.05, 0.007, 8, 28),
+      new THREE.MeshBasicMaterial({ color: COL_CYAN, wireframe: true, transparent: true, opacity: 0.9 }));
+    group.add(ring);
+    // 中央核心舱
+    const hub = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.014, 0.014, 0.05, 8),
+      new THREE.MeshBasicMaterial({ color: COL_CYAN, wireframe: true, transparent: true, opacity: 0.85 }));
+    hub.rotation.x = Math.PI / 2;
+    group.add(hub);
+    // 四条辐条
+    for (let i = 0; i < 4; i++) {
+      const spoke = new THREE.Mesh(
+        new THREE.BoxGeometry(0.096, 0.0024, 0.0024),
+        new THREE.MeshBasicMaterial({ color: COL_CYAN, transparent: true, opacity: 0.6 }));
+      spoke.rotation.z = (i / 4) * Math.PI;
+      group.add(spoke);
+    }
+    // 琥珀武器核心
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.012, 10, 10),
+      new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    group.add(core);
+    this.root.add(group);
+
+    this.satellites.push({ towerCell: cellId, group, line, e1: n, e2: u, angle: 0, cooldown: 2, station: true });
   }
 
   private updateSatellites(dt: number) {
     for (const s of this.satellites) {
+      if (s.station) { this.updateStation(s, dt); continue; }
       s.angle += dt * 0.42;
       const pos = s.e1.clone().multiplyScalar(Math.cos(s.angle))
         .addScaledVector(s.e2, Math.sin(s.angle)).multiplyScalar(1.42);
@@ -631,6 +677,50 @@ export class Game {
       this.spawnFlash(target.pos.clone(), COL_CYAN, 0.008, 0.12);
       sfx.play('shoot', 90);
       this.damageOrbital(target, this.towerDamage(tower));
+    }
+  }
+
+  /** 空间站运转：环绕 + 自旋，星下点覆盖范围内轨道轰炸最密集敌群 */
+  private updateStation(s: Satellite, dt: number) {
+    s.angle += dt * STATION_SPEED;
+    const pos = s.e1.clone().multiplyScalar(Math.cos(s.angle))
+      .addScaledVector(s.e2, Math.sin(s.angle)).multiplyScalar(STATION_RADIUS);
+    s.group.position.copy(pos);
+    s.group.rotation.z += dt * 0.5;
+    s.group.rotation.y += dt * 0.22;
+
+    s.cooldown -= dt;
+    if (s.cooldown > 0) return;
+    const tower = this.towerAt(s.towerCell);
+    if (!tower) return;
+
+    // 星下点：空间站正下方的地表方向
+    const subPoint = pos.clone().normalize();
+    let target: Unit | null = null; let bestScore = 0;
+    const stride = Math.max(1, Math.floor(this.units.length / 60)); // 采样防 O(n²)
+    for (let ui = 0; ui < this.units.length; ui += stride) {
+      const u = this.units[ui];
+      if (!u.alive || subPoint.angleTo(u.pos) > STATION_FOOTPRINT) continue;
+      let score = 0;
+      for (const v of this.units) { if (v.alive && v.pos.distanceTo(u.pos) < STATION_AOE) score++; }
+      if (score > bestScore) { bestScore = score; target = u; }
+    }
+    if (!target) return;
+    s.cooldown = tower.def.cooldown;
+    const hit = target.pos.clone();
+    // 轨道轰炸：光柱从空间站射向地面
+    this.spawnBeam(pos.clone(), hit, 0.012, COL_AMBER);
+    this.spawnFlash(hit, COL_AMBER, 0.035, 0.4);
+    this.spawnRing(hit, COL_AMBER, 0.09);
+    this.spawnFlash(pos.clone(), COL_AMBER, 0.016, 0.2);
+    sfx.play('intercept', 400);
+    const dmg = this.towerDamage(tower);
+    for (const v of this.units) {
+      if (!v.alive) continue;
+      if (v.pos.distanceTo(hit) < STATION_AOE) {
+        v.hp -= Math.max(1, dmg - v.def.armor);
+        if (v.hp <= 0) this.killUnit(v, true);
+      }
     }
   }
 
@@ -668,7 +758,7 @@ export class Game {
     const cellId = t.cellId;
     const idx = this.towers.indexOf(t);
     if (idx < 0) return;
-    if (t.def.key === 'satellite') {
+    if (t.def.key === 'satellite' || t.def.key === 'station') {
       const si = this.satellites.findIndex((s) => s.towerCell === cellId);
       if (si >= 0) {
         this.root.remove(this.satellites[si].group);
@@ -693,8 +783,8 @@ export class Game {
     if (idx < 0) return;
     const t = this.towers[idx];
     sfx.play('sell');
-    // 卫星站出售时回收在轨卫星
-    if (t.def.key === 'satellite') {
+    // 卫星站/空间站出售时回收在轨平台
+    if (t.def.key === 'satellite' || t.def.key === 'station') {
       const si = this.satellites.findIndex((s) => s.towerCell === cellId);
       if (si >= 0) {
         this.root.remove(this.satellites[si].group);
@@ -809,23 +899,29 @@ export class Game {
         bob.push({ obj: core2, base: 0.042, amp: 0.005, freq: 2.6 });
         break;
       }
-      case 'railgun': {
-        // 重炮平台：宽八角基座 + 双联主炮管指天
-        addPart(new THREE.CylinderGeometry(0.022, 0.027, 0.022, 8), 0.011);
-        for (const side of [-1, 1]) {
-          const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.006, 0.095, 6), fill);
-          barrel.position.set(side * 0.009, 0.06, 0);
-          group.add(barrel);
-          const be2 = new THREE.LineSegments(new THREE.EdgesGeometry(barrel.geometry), edgeM);
-          be2.position.copy(barrel.position);
-          group.add(be2); edges.push(be2);
+      case 'station': {
+        // 地面指挥站：八角基座 + 上行链路天线阵 + 通天数据光柱
+        addPart(new THREE.CylinderGeometry(0.02, 0.025, 0.02, 8), 0.01);
+        for (let i = 0; i < 3; i++) {
+          const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.0018, 0.0018, 0.04, 4), fill);
+          const a3 = (i / 3) * Math.PI * 2;
+          mast.position.set(Math.cos(a3) * 0.012, 0.04, Math.sin(a3) * 0.012);
+          group.add(mast);
+          const me = new THREE.LineSegments(new THREE.EdgesGeometry(mast.geometry), edgeM);
+          me.position.copy(mast.position);
+          group.add(me); edges.push(me);
         }
-        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.007, 8, 8),
-          new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
-        tip.position.y = 0.112;
-        group.add(tip);
-        group.userData.muzzle = tip;
-        ring = mkRing(0.024, 0.02);
+        // 上行数据光柱：与在轨空间站的视觉纽带
+        const uplink = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0028, 0.005, 0.16, 6, 1, true),
+          new THREE.MeshBasicMaterial({
+            color: COL_CYAN, transparent: true, opacity: 0.22,
+            blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+          }));
+        uplink.position.y = 0.1;
+        group.add(uplink);
+        group.userData.muzzle = uplink;
+        ring = mkRing(0.022, 0.018);
         break;
       }
       case 'gatling': {
@@ -1825,7 +1921,7 @@ export class Game {
         continue;
       }
       if (tw.def.key === 'radar' || tw.def.key === 'reactor') continue; // 增益/经济塔不攻击
-      if (tw.def.key === 'satellite') continue; // 攻击由在轨卫星执行
+      if (tw.def.key === 'satellite' || tw.def.key === 'station') continue; // 攻击由在轨平台执行
 
       tw.cooldown -= dt * rateMul;
       if (tw.cooldown > 0) continue;
@@ -1848,35 +1944,6 @@ export class Game {
         continue;
       }
 
-      if (tw.def.key === 'railgun') {
-        // 轨道重炮：锁定地面最密集的敌群，天降光柱范围轰击
-        let target: Unit | null = null; let bestScore = 0;
-        const stride = Math.max(1, Math.floor(this.units.length / 60)); // 采样防 O(n²)
-        for (let ui = 0; ui < this.units.length; ui += stride) {
-          const u = this.units[ui];
-          if (!u.alive || towerN.angleTo(u.pos) > range) continue;
-          let score = 0;
-          for (const v of this.units) { if (v.alive && v.pos.distanceTo(u.pos) < 0.09) score++; }
-          if (score > bestScore) { bestScore = score; target = u; }
-        }
-        if (!target) continue;
-        tw.cooldown = tw.def.cooldown;
-        const hit = target.pos.clone();
-        // 天降光柱：从高空垂直劈下
-        this.spawnBeam(hit.clone().normalize().multiplyScalar(1.45), hit, 0.01, COL_AMBER);
-        this.spawnFlash(hit, COL_AMBER, 0.035, 0.4);
-        this.spawnRing(hit, COL_AMBER, 0.09);
-        sfx.play('intercept', 0);
-        const dmg = this.towerDamage(tw);
-        for (const v of this.units) {
-          if (!v.alive) continue;
-          if (v.pos.distanceTo(hit) < 0.09) {
-            v.hp -= Math.max(1, dmg - v.def.armor);
-            if (v.hp <= 0) this.killUnit(v, true);
-          }
-        }
-        continue;
-      }
       if (tw.def.key === 'plasma') {
         // 等离子灼烧：射程内全体持续掉血，天生的尸潮克星
         tw.cooldown = tw.def.cooldown;
