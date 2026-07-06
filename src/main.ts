@@ -9,6 +9,11 @@ import { sfx } from './sound';
 
 // ---------- 关卡会话 ----------
 const progress = loadProgress();
+// 开发者后门：?unlock=all 解锁全部关卡（写入存档后建议去掉参数刷新）
+if (new URLSearchParams(location.search).get('unlock') === 'all') {
+  progress.unlocked = LEVELS.length;
+  saveProgress(progress);
+}
 const session = getSession();
 const isEndless = session.level === ENDLESS_LEVEL.id;
 const levelId = isEndless ? ENDLESS_LEVEL.id
