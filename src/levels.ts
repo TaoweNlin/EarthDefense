@@ -6,11 +6,12 @@
 
 export interface WaveCfg {
   prewave: number;  // 距上一波发起的秒数（首波 = 开局布防时间）
-  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter' | 'crawler' | 'behemoth' | 'shrieker'; n: number }[];
+  drops: { type: 'swarm' | 'runner' | 'armored' | 'splitter' | 'crawler' | 'behemoth' | 'shrieker'; n: number; heavy?: boolean }[];
   jammers?: number;
   divers?: number;    // 俯冲艇：不登陆，直接俯冲撞击城市
   gunships?: number;  // 炮舰：悬停在城市上空持续轰炸，只能防空打
   wings?: number;     // 飞行蜂群：成编队低空推进，防空割草靶
+  hives?: number;     // 虫巢母舰：远轨巨舰，持续倾泻立体虫群流
   boss?: boolean;
   tide?: boolean;     // 飞船潮：全向多波高潮，警报 + 红色天幕
 }
@@ -177,7 +178,7 @@ export const LEVELS: LevelCfg[] = [
       { prewave: 30, drops: [{ type: 'crawler', n: 32 }, { type: 'swarm', n: 16 }, { type: 'runner', n: 12 }], wings: 16, divers: 2, tide: true },
       { prewave: 26, drops: [{ type: 'crawler', n: 28 }, { type: 'behemoth', n: 2 }], wings: 12 },
       { prewave: 26, drops: [{ type: 'splitter', n: 10 }, { type: 'armored', n: 8 }], jammers: 1, wings: 14 },
-      { prewave: 32, drops: [{ type: 'crawler', n: 36 }, { type: 'crawler', n: 32 }, { type: 'behemoth', n: 2 }, { type: 'swarm', n: 18 }], wings: 22, divers: 3, tide: true },
+      { prewave: 32, drops: [{ type: 'crawler', n: 36 }, { type: 'crawler', n: 32 }, { type: 'behemoth', n: 2, heavy: true }, { type: 'swarm', n: 18 }], wings: 22, divers: 3, tide: true },
     ],
   },
   {
@@ -201,9 +202,9 @@ export const LEVELS: LevelCfg[] = [
     waves: [
       { prewave: 22, drops: [{ type: 'swarm', n: 14 }], wings: 16, divers: 2 },
       { prewave: 24, drops: [{ type: 'crawler', n: 28 }], jammers: 1, wings: 20, divers: 3 },
-      { prewave: 26, drops: [{ type: 'runner', n: 14 }], gunships: 2, wings: 24, divers: 3 },
-      { prewave: 26, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }], jammers: 2, wings: 26, divers: 4 },
-      { prewave: 34, drops: [{ type: 'crawler', n: 34 }, { type: 'swarm', n: 18 }, { type: 'behemoth', n: 2 }], wings: 34, divers: 5, gunships: 2, tide: true },
+      { prewave: 26, drops: [{ type: 'runner', n: 14 }], gunships: 2, hives: 1, divers: 2 },
+      { prewave: 26, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }], jammers: 2, wings: 20, divers: 4 },
+      { prewave: 34, drops: [{ type: 'crawler', n: 34 }, { type: 'swarm', n: 18 }, { type: 'behemoth', n: 2 }], wings: 24, divers: 5, gunships: 2, hives: 2, tide: true },
     ],
   },
   {
@@ -213,10 +214,10 @@ export const LEVELS: LevelCfg[] = [
     landingSpread: 1.6, lanes: 4, startEnergy: 440, towers: T9,
     waves: [
       { prewave: 22, drops: [{ type: 'armored', n: 9 }, { type: 'crawler', n: 26 }] },
-      { prewave: 26, drops: [{ type: 'armored', n: 11 }, { type: 'behemoth', n: 2 }], wings: 12 },
-      { prewave: 32, drops: [{ type: 'armored', n: 13 }, { type: 'crawler', n: 32 }, { type: 'behemoth', n: 2 }, { type: 'shrieker', n: 3 }], wings: 18, divers: 3, tide: true },
+      { prewave: 26, drops: [{ type: 'armored', n: 11, heavy: true }, { type: 'behemoth', n: 2 }], wings: 12 },
+      { prewave: 32, drops: [{ type: 'armored', n: 13, heavy: true }, { type: 'crawler', n: 32 }, { type: 'behemoth', n: 2 }, { type: 'shrieker', n: 3 }], wings: 18, divers: 3, tide: true },
       { prewave: 26, drops: [{ type: 'armored', n: 11 }, { type: 'splitter', n: 10 }], jammers: 2, wings: 16 },
-      { prewave: 34, drops: [{ type: 'armored', n: 15 }, { type: 'crawler', n: 36 }, { type: 'behemoth', n: 3 }, { type: 'shrieker', n: 4 }], wings: 24, divers: 4, gunships: 2, tide: true },
+      { prewave: 34, drops: [{ type: 'armored', n: 15, heavy: true }, { type: 'crawler', n: 36 }, { type: 'behemoth', n: 3, heavy: true }, { type: 'shrieker', n: 4 }], wings: 24, divers: 4, gunships: 2, tide: true },
     ],
   },
   {
@@ -227,11 +228,11 @@ export const LEVELS: LevelCfg[] = [
     waves: [
       { prewave: 24, drops: [{ type: 'crawler', n: 30 }, { type: 'swarm', n: 14 }], wings: 12 },
       { prewave: 26, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }, { type: 'behemoth', n: 2 }], jammers: 1, wings: 16 },
-      { prewave: 32, drops: [{ type: 'crawler', n: 34 }, { type: 'armored', n: 11 }, { type: 'shrieker', n: 4 }], wings: 22, divers: 3, tide: true },
+      { prewave: 32, drops: [{ type: 'crawler', n: 34 }, { type: 'armored', n: 11 }, { type: 'shrieker', n: 4 }], wings: 22, divers: 3, hives: 1, tide: true },
       { prewave: 26, drops: [{ type: 'splitter', n: 12 }, { type: 'runner', n: 14 }], jammers: 2, gunships: 2, wings: 18 },
-      { prewave: 32, drops: [{ type: 'crawler', n: 36 }, { type: 'behemoth', n: 3 }, { type: 'shrieker', n: 4 }, { type: 'armored', n: 13 }], wings: 26, divers: 4, tide: true },
+      { prewave: 32, drops: [{ type: 'crawler', n: 36 }, { type: 'behemoth', n: 3, heavy: true }, { type: 'shrieker', n: 4 }, { type: 'armored', n: 13, heavy: true }], wings: 20, divers: 4, hives: 2, tide: true },
       { prewave: 30, drops: [{ type: 'armored', n: 13 }, { type: 'crawler', n: 34 }], jammers: 2, wings: 20, divers: 3 },
-      { prewave: 36, drops: [{ type: 'crawler', n: 40 }, { type: 'crawler', n: 36 }, { type: 'behemoth', n: 4 }, { type: 'shrieker', n: 5 }, { type: 'armored', n: 15 }], wings: 36, divers: 5, gunships: 2, boss: true, tide: true },
+      { prewave: 36, drops: [{ type: 'crawler', n: 40 }, { type: 'crawler', n: 36 }, { type: 'behemoth', n: 4, heavy: true }, { type: 'shrieker', n: 5 }, { type: 'armored', n: 15, heavy: true }], wings: 26, divers: 5, gunships: 2, hives: 2, boss: true, tide: true },
     ],
   },
 ];

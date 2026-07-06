@@ -23,14 +23,14 @@ export interface TowerDef {
 }
 
 export const TOWER_DEFS: TowerDef[] = [
-  { key: 'pulse',     name: '脉冲炮',   sub: 'PULSE',   icon: '▲', cost: 70,  kind: 'ground',  range: 0.36, damage: 28, cooldown: 0.85, desc: '基础对地单体·便宜耐用' },
+  { key: 'pulse',     name: '脉冲炮',   sub: 'PULSE',   icon: '▲', cost: 70,  kind: 'ground',  range: 0.36, damage: 28, cooldown: 0.85, desc: '对地单体·兼打低空蜂群' },
   { key: 'tesla',     name: '磁暴塔',   sub: 'TESLA',   icon: '◈', cost: 140, kind: 'ground',  range: 0.30, damage: 6,  cooldown: 0,    desc: '减速 40% + 电弧链击' },
   { key: 'laser',     name: '轨道激光', sub: 'O-LASER', icon: '║', cost: 170, kind: 'air',     range: 0.60, damage: 22, cooldown: 0,    desc: '对空持续射线·锁定增伤' },
   { key: 'missile',   name: '破片导弹', sub: 'FRAG-M',  icon: '✦', cost: 190, kind: 'air',     range: 0.55, damage: 80, cooldown: 4.0,  desc: '对空范围爆发' },
   { key: 'radar',     name: '雷达站',   sub: 'RADAR',   icon: '◍', cost: 120, kind: 'support', range: 0.40, damage: 0,  cooldown: 0,    desc: '射程内塔 +25% 射速' },
   { key: 'prism',     name: '汇聚棱镜', sub: 'PRISM',   icon: '◆', cost: 220, kind: 'ground',  range: 0.42, damage: 42, cooldown: 1.5,  desc: '相邻每塔 +45% 伤害' },
   { key: 'satellite', name: '防御卫星', sub: 'SAT-NET', icon: '✧', cost: 260, kind: 'air',     range: 0.55, damage: 16, cooldown: 0.55, desc: '部署轨道卫星环球巡航' },
-  { key: 'gatling',   name: '加特林',   sub: 'GATLING', icon: '≡', cost: 130, kind: 'ground',  range: 0.33, damage: 9,  cooldown: 0.14, desc: '超高射速·割草基干' },
+  { key: 'gatling',   name: '加特林',   sub: 'GATLING', icon: '≡', cost: 130, kind: 'ground',  range: 0.33, damage: 9,  cooldown: 0.14, desc: '超高射速·对地兼打低空' },
   { key: 'plasma',    name: '等离子灼烧', sub: 'PLASMA', icon: '✺', cost: 180, kind: 'ground', range: 0.24, damage: 8,  cooldown: 0.22, desc: '持续灼烧射程内全部敌人' },
   { key: 'reactor',   name: '能源反应堆', sub: 'REACTOR', icon: '⌬', cost: 150, kind: 'support', range: 0, damage: 0, cooldown: 0,   desc: '+2.5⚡/s·用地换经济' },
   { key: 'station',   name: '轨道空间站', sub: 'ORBITAL STN', icon: '❂', cost: 350, kind: 'air', range: 0.45, damage: 80, cooldown: 3, desc: '部署环球空间站·轰炸轨迹下方敌群' },
@@ -161,7 +161,14 @@ const STATION_SPEED = 0.3;      // 角速度 rad/s，约 21s 一圈
 const STATION_FOOTPRINT = 0.45; // 星下点覆盖半径（球面角）
 const STATION_AOE = 0.09;
 
-type OrbitalKind = 'transport' | 'jammer' | 'boss' | 'diver' | 'gunship' | 'wing';
+type OrbitalKind = 'transport' | 'jammer' | 'boss' | 'diver' | 'gunship' | 'wing' | 'hive';
+// 虫巢母舰：部署在远轨，持续向星球倾泻立体虫群流
+const HIVE_RADIUS = 2.1;
+const HIVE_HP = 850;
+const HIVE_REWARD = 130;
+const HIVE_SQUAD_INTERVAL = 5.5; // 每批虫群间隔
+const HIVE_SQUAD_SIZE = 11;      // 每批数量
+const WING_CAP = 450;            // 全场蜂群上限（性能保险丝）
 interface Orbital {
   kind: OrbitalKind; hp: number; maxHp: number; alive: boolean;
   group: THREE.Group; pos: THREE.Vector3;
@@ -172,6 +179,7 @@ interface Orbital {
   marker: THREE.Group | null; trail: THREE.Line | null;
   // jammer/boss 专用
   orbitAxis: THREE.Vector3; orbitAngle: number; dropTimer: number;
+  heavy?: boolean; // 重型登陆舱：厚甲、慢速、远距登陆
 }
 
 interface Fx { obj: THREE.Object3D; ttl: number; max: number; kind: 'laser' | 'ring' | 'flash' | 'beam' | 'arc' }
@@ -237,7 +245,7 @@ export class Game {
       behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
       shrieker: new InstancePool(this.root, new THREE.ConeGeometry(D.shrieker.size * 0.8, D.shrieker.size * 2.4, 5), '#ff4d7d', 128),
     };
-    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 256);
+    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 512);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
@@ -297,6 +305,10 @@ export class Game {
     if (i >= 6 && (tide || i % 3 === 1)) {
       drops.push({ type: 'shrieker', n: Math.ceil((i - 3) / 5) });
     }
+    // 重型登陆舱：波 9 起，每 3 波一艘从远端登陆
+    if (i >= 8 && (tide || i % 3 === 2) && drops.length) {
+      drops[0] = { ...drops[0], heavy: true };
+    }
     return {
       prewave: tide ? 30 : i === 0 ? 20 : Math.max(13, 24 - i * 0.5),
       drops,
@@ -304,6 +316,7 @@ export class Game {
       divers: (i >= 4 ? Math.floor((i - 2) / 2) : 0) * tideMul,
       gunships: (i >= 6 ? Math.floor((i - 3) / 3) : 0) * tideMul,
       wings: (i >= 3 ? Math.round(4 + (i - 2) * 2.2) : 0) * tideMul,
+      hives: tide && i >= 9 ? Math.min(3, Math.floor(i / 10)) : (i >= 13 && i % 6 === 5 ? 1 : 0),
       boss: i > 0 && i % 8 === 7, // 每 8 波一艘母舰
       tide,
     };
@@ -1110,13 +1123,28 @@ export class Game {
     const cfg = this.waveAt(this.launched);
     if (!cfg) return;
     this.pending = [];
+    const distFromCities = this.bfsFromCities();
     for (let i = 0; i < cfg.drops.length; i++) {
-      // 登陆点固定在进攻走廊内：走廊格本身或其相邻格
-      const laneId = this.laneCells[(this.launched + i) % Math.max(1, this.laneCells.length)];
-      const lane = this.grid.cells[laneId];
-      const options = [lane, ...lane.neighbors.map((id) => this.grid.cells[id])]
-        .filter((c) => c.terrain !== 'ocean' && !this.occupied.has(c.id));
-      const pick = options.length ? options[Math.floor(this.rand() * options.length)] : lane;
+      let pick: Cell;
+      if (cfg.drops[i].heavy) {
+        // 重型登陆舱：在防区远端登陆（距城 5~8 格），部队需要长途推进
+        let far = this.grid.cells.filter((c) =>
+          c.terrain !== 'ocean' && !this.occupied.has(c.id) &&
+          distFromCities[c.id] >= 5 && distFromCities[c.id] <= 8 &&
+          c.center.angleTo(this.cityCenter) <= this.cfg.landingSpread * 1.4);
+        if (!far.length) {
+          far = this.grid.cells.filter((c) =>
+            c.terrain !== 'ocean' && !this.occupied.has(c.id) && distFromCities[c.id] >= 4);
+        }
+        pick = far.length ? far[Math.floor(this.rand() * far.length)] : this.grid.cells[this.laneCells[0]];
+      } else {
+        // 常规登陆点固定在进攻走廊内：走廊格本身或其相邻格
+        const laneId = this.laneCells[(this.launched + i) % Math.max(1, this.laneCells.length)];
+        const lane = this.grid.cells[laneId];
+        const options = [lane, ...lane.neighbors.map((id) => this.grid.cells[id])]
+          .filter((c) => c.terrain !== 'ocean' && !this.occupied.has(c.id));
+        pick = options.length ? options[Math.floor(this.rand() * options.length)] : lane;
+      }
       const n = pick.center.clone();
       // 预定轨道平面：预警阶段即确定并显示航迹
       const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
@@ -1193,7 +1221,7 @@ export class Game {
     cfg.drops.forEach((drop, i) => {
       const p = this.pending[i];
       const cargo = { type: drop.type, n: Math.round(drop.n * HORDE_MUL) };
-      this.spawnTransport(p.cellId, cargo, i * 2.2, p.marker, false, { u: p.u, trail: p.trail });
+      this.spawnTransport(p.cellId, cargo, i * 2.2, p.marker, false, { u: p.u, trail: p.trail }, drop.heavy);
     });
     this.markers = [];
     this.pending = [];
@@ -1204,6 +1232,7 @@ export class Game {
       this.spawnWings(cfg.wings);
       this.banner('飞行蜂群来袭', 'WING SWARM INBOUND // 防空火力自由射击', false, 3000);
     }
+    for (let h = 0; h < (cfg.hives ?? 0); h++) this.spawnHive(h);
     if (cfg.gunships) this.banner('炮舰压顶', 'GUNSHIP ON STATION // 仅防空可拦截', false, 3000);
     if (cfg.boss) this.spawnBoss();
 
@@ -1232,26 +1261,35 @@ export class Game {
     };
   }
 
-  private spawnTransport(landCell: number, cargo: { type: string; n: number }, delay: number, marker: THREE.Group | null, skipOrbit = false, pre?: { u: THREE.Vector3; trail: THREE.Line }) {
+  private spawnTransport(landCell: number, cargo: { type: string; n: number }, delay: number, marker: THREE.Group | null, skipOrbit = false, pre?: { u: THREE.Vector3; trail: THREE.Line }, heavy = false) {
     const n = this.grid.cells[landCell].center.clone();
     const ref = Math.abs(n.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
     const u = pre?.u ?? new THREE.Vector3().crossVectors(n, ref).normalize()
       .applyAxisAngle(n, this.rand() * Math.PI * 2);
 
-    const o = this.baseOrbital('transport', TRANSPORT_HP);
+    const o = this.baseOrbital('transport', heavy ? Math.round(TRANSPORT_HP * 3.2) : TRANSPORT_HP);
+    o.heavy = heavy;
     o.landCell = landCell; o.cargo = { ...cargo };
     o.basisN = n; o.basisU = u;
     o.theta = skipOrbit ? 0 : -3.1 - delay * 0.35;
     o.marker = marker;
 
+    const scale = heavy ? 1.7 : 1;
     const body = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.045),
-      new THREE.MeshBasicMaterial({ color: COL_ROSE, wireframe: true, transparent: true, opacity: 0.9 }));
+      new THREE.OctahedronGeometry(0.045 * scale),
+      new THREE.MeshBasicMaterial({ color: heavy ? new THREE.Color('#c22343') : COL_ROSE, wireframe: true, transparent: true, opacity: 0.9 }));
     o.group.add(body);
     const glow = new THREE.Mesh(
-      new THREE.OctahedronGeometry(0.02),
+      new THREE.OctahedronGeometry(0.02 * scale),
       new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.75 }));
     o.group.add(glow);
+    if (heavy) {
+      // 重型登陆舱：附加装甲环，一眼可辨
+      const armor = new THREE.Mesh(
+        new THREE.TorusGeometry(0.06, 0.006, 6, 18),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color('#c22343'), transparent: true, opacity: 0.7 }));
+      o.group.add(armor);
+    }
     o.group.visible = skipOrbit;
     this.root.add(o.group);
 
@@ -1418,20 +1456,73 @@ export class Game {
     const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
 
     for (let i = 0; i < count; i++) {
-      const o = this.baseOrbital('wing', WING_HP);
-      o.landCell = city.cellId;
-      // 编队横向抖动 + 纵向错峰
+      // 编队横向抖动
       const spread = (this.rand() - 0.5) * 0.22;
       const spread2 = (this.rand() - 0.5) * 0.22;
-      o.basisN = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
-      o.basisU = cityDir.clone();
-      o.orbitAngle = o.basisN.angleTo(o.basisU); // 总航程角
-      o.theta = -i * 0.055;                      // 进度（负值 = 延迟出场）
-
-      // 蜂群走实例化渲染池，group 只承担位置计算，不进场景
-      o.group.visible = false;
-      this.orbitals.push(o);
+      const dir = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
+      this.spawnWingUnit(dir, city.cellId, WING_ALT, i * 0.055);
     }
+  }
+
+  /** 生成单只蜂群：startRadius > 巡航高度时为"虫巢流"（俯冲进场 + 螺旋队形） */
+  private spawnWingUnit(startDir: THREE.Vector3, cityCell: number, startRadius: number, delayProgress: number) {
+    if (this.orbitals.filter((o) => o.kind === 'wing' && o.alive).length > WING_CAP) return;
+    const o = this.baseOrbital('wing', WING_HP);
+    o.landCell = cityCell;
+    o.basisN = startDir.clone();
+    o.basisU = this.grid.cells[cityCell].center.clone();
+    o.orbitAngle = o.basisN.angleTo(o.basisU); // 总航程角
+    o.theta = -delayProgress;                  // 进度（负值 = 延迟出场）
+    o.dropTimer = startRadius;                 // 出发高度
+    o.deployTimer = this.rand() * Math.PI * 2; // 螺旋相位
+    o.group.visible = false;                   // 蜂群走实例化渲染池
+    this.orbitals.push(o);
+  }
+
+  /** 虫巢母舰：远轨巨舰，周期性向星球倾泻立体虫群流，倾泻完毕后撤离 */
+  private spawnHive(delay: number) {
+    const targets = this.cities.filter((c) => c.alive);
+    if (!targets.length) return;
+    // 部署位：防区外围方向的远轨
+    const ref0 = this.cityCenter.clone();
+    const refv = Math.abs(ref0.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const tangent = new THREE.Vector3().crossVectors(ref0, refv).normalize()
+      .applyAxisAngle(ref0, this.rand() * Math.PI * 2);
+    const ang = Math.min(Math.PI * 0.75, this.cfg.landingSpread * 0.9 + 0.4);
+    const dir = ref0.clone().applyAxisAngle(tangent, ang).normalize();
+
+    const o = this.baseOrbital('hive', HIVE_HP);
+    o.orbitAxis = dir;                 // 驻留方向
+    o.dropTimer = 2.5 + delay * 3;     // 首批虫群倒计时
+    o.cargo = { type: 'wing', n: 6 };  // 剩余批次
+    o.phase = 'orbit';
+
+    // 巨型舰体：大双层线框 + 内核 + 双旋转环
+    const hull = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.1, 0),
+      new THREE.MeshBasicMaterial({ color: COL_ROSE, wireframe: true, transparent: true, opacity: 0.85 }));
+    o.group.add(hull);
+    const inner = new THREE.Mesh(
+      new THREE.IcosahedronGeometry(0.055, 0),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color('#7a1030'), transparent: true, opacity: 0.8 }));
+    o.group.add(inner);
+    const core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.022, 10, 10),
+      new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+    o.group.add(core);
+    for (const tilt of [0.5, -0.7]) {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(0.13, 0.004, 6, 32),
+        new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity: 0.4 }));
+      ring.rotation.x = tilt;
+      o.group.add(ring);
+    }
+    o.group.position.copy(dir.clone().multiplyScalar(HIVE_RADIUS));
+    o.group.scale.setScalar(0.01); // 跃迁进场
+    this.root.add(o.group);
+    this.orbitals.push(o);
+    sfx.play('alarm', 0);
+    this.banner('虫巢母舰进入高轨', 'HIVE SHIP ON STATION // 虫群倾泻在即', false, 3400);
   }
 
   /** 炮舰：飞抵城市上空悬停，持续轰炸，只能被防空火力击落 */
@@ -1479,7 +1570,7 @@ export class Game {
 
       if (o.kind === 'transport') {
         if (o.phase === 'orbit') {
-          o.theta += dt * 0.55;
+          o.theta += dt * (o.heavy ? 0.4 : 0.55); // 重型舱更慢，给拦截留窗口
           if (o.theta < -3.05) continue;
           o.group.visible = true;
           const r = this.orbitRadius(o.theta);
@@ -1510,14 +1601,69 @@ export class Game {
         if (o.theta < 0) continue; // 编队错峰
         o.group.visible = true;
         const k = Math.min(1, o.theta);
-        const alt = WING_ALT + 0.008 * Math.sin(this.time * 3 + o.landCell + o.orbitAngle * 37);
-        o.group.position.copy(o.basisN.clone().lerp(o.basisU, k).normalize().multiplyScalar(alt));
+        const startR = o.dropTimer || WING_ALT;
+        // 高度：从出发高度平滑俯冲到巡航高度（虫巢流从远轨压下来）
+        const dive = Math.min(1, k * 1.6);
+        const baseAlt = startR + (WING_ALT - startR) * (1 - (1 - dive) * (1 - dive));
+        const alt = baseAlt + 0.008 * Math.sin(this.time * 3 + o.landCell + o.orbitAngle * 37);
+        const dir = o.basisN.clone().lerp(o.basisU, k).normalize();
+        o.group.position.copy(dir.multiplyScalar(alt));
+        // 虫巢流的立体螺旋队形：绕飞行走廊盘旋，越接近目标越收束
+        if (startR > WING_ALT + 0.05) {
+          const axis = new THREE.Vector3().crossVectors(o.basisN, o.basisU).normalize();
+          const side = new THREE.Vector3().crossVectors(dir, axis).normalize();
+          const ph = o.deployTimer + k * 9;
+          const amp = 0.07 * (1 - k);
+          o.group.position
+            .addScaledVector(axis, Math.cos(ph) * amp)
+            .addScaledVector(side, Math.sin(ph) * amp);
+        }
         if (k >= 1) {
           // 抵达城市上空：自杀式冲撞
           o.phase = 'done';
           o.alive = false;
           this.hitCity(o.landCell, WING_IMPACT_DAMAGE, false);
           this.spawnFlash(o.group.position.clone(), COL_ROSE, 0.012, 0.2);
+        }
+      } else if (o.kind === 'hive') {
+        // 跃迁进场
+        if (o.group.scale.x < 1) o.group.scale.setScalar(Math.min(1, o.group.scale.x + dt * 0.8));
+        o.group.rotation.y += dt * 0.3;
+        o.group.rotation.x += dt * 0.12;
+        // 呼吸浮动
+        const drift = 1 + 0.015 * Math.sin(this.time * 0.9 + o.dropTimer);
+        o.group.position.copy(o.orbitAxis.clone().multiplyScalar(HIVE_RADIUS * drift));
+        if (o.phase === 'orbit') {
+          o.dropTimer -= dt;
+          if (o.dropTimer <= 0 && o.group.scale.x >= 1) {
+            // 倾泻一批虫群：从舰体涌出的立体虫流
+            o.dropTimer = HIVE_SQUAD_INTERVAL;
+            o.cargo.n--;
+            const targets = this.cities.filter((c) => c.alive);
+            if (targets.length) {
+              const city = targets[Math.floor(this.rand() * targets.length)];
+              for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
+                const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
+                  .multiplyScalar(0.14);
+                this.spawnWingUnit(
+                  o.orbitAxis.clone().add(jitter).normalize(), city.cellId,
+                  HIVE_RADIUS, w * 0.035);
+              }
+              this.spawnRing(o.group.position.clone(), COL_ROSE, 0.12);
+              sfx.play('jam', 400);
+            }
+            if (o.cargo.n <= 0) { o.phase = 'descend'; o.descendT = 0; } // 倾泻完毕，撤离
+          }
+        } else if (o.phase === 'descend') {
+          // 撤离：加速远去并淡出
+          o.descendT += dt / 4;
+          o.group.position.copy(o.orbitAxis.clone()
+            .multiplyScalar(HIVE_RADIUS + o.descendT * 1.6));
+          if (o.descendT >= 1) {
+            o.phase = 'done';
+            o.alive = false;
+            this.root.remove(o.group);
+          }
         }
       } else if (o.kind === 'diver') {
         if (o.phase === 'orbit') {
@@ -1658,13 +1804,14 @@ export class Game {
       sfx.play('intercept', 120);
       const rewards: Record<OrbitalKind, number> = {
         transport: TRANSPORT_REWARD, jammer: JAMMER_REWARD, boss: BOSS_REWARD,
-        diver: DIVER_REWARD, gunship: GUNSHIP_REWARD, wing: WING_REWARD,
+        diver: DIVER_REWARD, gunship: GUNSHIP_REWARD, wing: WING_REWARD, hive: HIVE_REWARD,
       };
       this.energy += rewards[o.kind];
-      this.spawnRing(o.pos.clone(), COL_CYAN, o.kind === 'boss' ? 0.14 : 0.08);
+      this.spawnRing(o.pos.clone(), COL_CYAN, o.kind === 'boss' || o.kind === 'hive' ? 0.14 : 0.08);
       this.root.remove(o.group);
       if (o.trail) this.root.remove(o.trail);
       if (o.kind === 'boss') this.banner('母舰击毁', 'MOTHERSHIP DESTROYED', true, 3000);
+      if (o.kind === 'hive') this.banner('虫巢击毁', 'HIVE SHIP DESTROYED // 虫群断供', true, 3000);
     }
   }
 
@@ -1977,7 +2124,26 @@ export class Game {
         const progress = u.seg + u.t;
         if (progress > bestProgress) { bestProgress = progress; target = u; }
       }
-      if (!target) continue;
+      if (!target) {
+        // 脉冲炮/加特林：地面无目标时兼打低空蜂群
+        if (tw.def.key === 'pulse' || tw.def.key === 'gatling') {
+          let wing: Orbital | null = null; let bestA = Infinity;
+          for (const o of this.orbitals) {
+            if (o.kind !== 'wing' || !o.alive || !o.group.visible || o.phase === 'done') continue;
+            const a = towerN.angleTo(o.pos.clone().normalize());
+            if (a < range && a < bestA) { bestA = a; wing = o; }
+          }
+          if (wing) {
+            tw.cooldown = tw.def.cooldown;
+            const from = towerN.clone().multiplyScalar(towerH + 0.062);
+            this.fireLine(from, wing.pos.clone(), 0.12);
+            this.spawnFlash(from, COL_CYAN, 0.007, 0.12);
+            sfx.play('shoot', 80);
+            this.damageOrbital(wing, this.towerDamage(tw));
+          }
+        }
+        continue;
+      }
       tw.cooldown = tw.def.cooldown;
       const dmg = Math.max(1, this.towerDamage(tw) - target.def.armor);
       target.hp -= dmg;
