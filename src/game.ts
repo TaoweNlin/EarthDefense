@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import type { GoldbergGrid, Cell } from './goldberg';
 import type { LevelCfg, WaveCfg } from './levels';
 import { sfx } from './sound';
+import { InstancePool } from './instances';
 
 const COL_CYAN = new THREE.Color('#22d3ee');
 const COL_ROSE = new THREE.Color('#f43f5e');
@@ -125,10 +126,11 @@ export interface Tower {
 
 interface Unit {
   type: string; def: GroundDef;
-  mesh: THREE.Mesh; path: number[]; seg: number; t: number;
+  path: number[]; seg: number; t: number;
   hp: number; alive: boolean; pos: THREE.Vector3; slowUntilFrame: boolean;
   offset: THREE.Vector3;  // 横向散布：避免同舱单位叠成一条线
   speedMul: number;       // 个体速度抖动
+  spin: number;           // 自旋相位（实例化渲染用）
 }
 
 interface Satellite {
@@ -172,6 +174,8 @@ export class Game {
   private laneCells: number[] = [];
   private laneMarkers: THREE.Group[] = [];
   satellites: Satellite[] = [];
+  private unitPools!: Record<string, InstancePool>;
+  private wingPool!: InstancePool;
 
   cities: City[] = [];
   towers: Tower[] = [];
@@ -195,9 +199,37 @@ export class Game {
   ) {
     this.energy = cfg.startEnergy;
     earthGroup.add(this.root);
+    // 实例化渲染池：海量敌人的性能地基（一类怪 = 一次 draw call）
+    const D = GROUND_DEFS;
+    this.unitPools = {
+      swarm: new InstancePool(this.root, new THREE.TetrahedronGeometry(D.swarm.size), COL_ROSE, 512),
+      runner: new InstancePool(this.root, new THREE.ConeGeometry(D.runner.size * 0.7, D.runner.size * 2.2, 4), COL_ROSE, 384),
+      armored: new InstancePool(this.root, new THREE.OctahedronGeometry(D.armored.size), '#c22343', 384),
+      splitter: new InstancePool(this.root, new THREE.IcosahedronGeometry(D.splitter.size, 0), COL_ROSE, 384),
+      swarmling: new InstancePool(this.root, new THREE.TetrahedronGeometry(D.swarmling.size), COL_ROSE, 512),
+    };
+    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 256);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
+  }
+
+  /** 每帧一次（由主循环在全部逻辑子步后调用），把存活单位写入实例缓冲 */
+  renderInstances() {
+    const t = this.time;
+    for (const k in this.unitPools) this.unitPools[k].begin();
+    for (const u of this.units) {
+      if (!u.alive) continue;
+      this.unitPools[u.type].push(u.pos, t * 3.1 + u.spin, t * 2.3 + u.spin * 1.7);
+    }
+    for (const k in this.unitPools) this.unitPools[k].end();
+
+    this.wingPool.begin();
+    for (const o of this.orbitals) {
+      if (o.kind !== 'wing' || !o.alive || !o.group.visible || o.phase === 'done') continue;
+      this.wingPool.push(o.group.position, t * 2.6 + o.orbitAngle * 37, t * 3.4 + o.orbitAngle * 11);
+    }
+    this.wingPool.end();
   }
 
   /** 由主菜单/自动开始调用，正式进入布防倒计时 */
@@ -1149,12 +1181,8 @@ export class Game {
       o.orbitAngle = o.basisN.angleTo(o.basisU); // 总航程角
       o.theta = -i * 0.055;                      // 进度（负值 = 延迟出场）
 
-      const body = new THREE.Mesh(
-        new THREE.TetrahedronGeometry(0.013),
-        new THREE.MeshBasicMaterial({ color: COL_ROSE, wireframe: true, transparent: true, opacity: 0.95 }));
-      o.group.add(body);
+      // 蜂群走实例化渲染池，group 只承担位置计算，不进场景
       o.group.visible = false;
-      this.root.add(o.group);
       this.orbitals.push(o);
     }
   }
@@ -1237,15 +1265,12 @@ export class Game {
         const k = Math.min(1, o.theta);
         const alt = WING_ALT + 0.008 * Math.sin(this.time * 3 + o.landCell + o.orbitAngle * 37);
         o.group.position.copy(o.basisN.clone().lerp(o.basisU, k).normalize().multiplyScalar(alt));
-        o.group.rotation.x += dt * 2.6;
-        o.group.rotation.y += dt * 3.4;
         if (k >= 1) {
           // 抵达城市上空：自杀式冲撞
           o.phase = 'done';
           o.alive = false;
           this.hitCity(o.landCell, WING_IMPACT_DAMAGE, false);
           this.spawnFlash(o.group.position.clone(), COL_ROSE, 0.012, 0.2);
-          this.root.remove(o.group);
         }
       } else if (o.kind === 'diver') {
         if (o.phase === 'orbit') {
@@ -1379,7 +1404,6 @@ export class Game {
       this.energy += WING_REWARD;
       sfx.play('explosion', 130);
       this.spawnRing(o.pos.clone(), COL_CYAN, 0.03);
-      this.root.remove(o.group);
     } else {
       o.alive = false;
       this.stats.intercepted++;
@@ -1399,32 +1423,21 @@ export class Game {
   // ============ 地面单位 ============
 
   private spawnUnit(fromCell: number, type: string) {
-    if (this.units.length > 400) return; // 性能保险丝：同屏地面单位上限
+    if (this.units.length > 800) return; // 性能保险丝：同屏地面单位上限
     const def = GROUND_DEFS[type];
     const path = this.findPath(fromCell);
     if (!path || path.length < 2) return;
-    let geo: THREE.BufferGeometry;
-    if (type === 'armored') geo = new THREE.OctahedronGeometry(def.size);
-    else if (type === 'runner') geo = new THREE.ConeGeometry(def.size * 0.7, def.size * 2.2, 4);
-    else if (type === 'splitter') geo = new THREE.IcosahedronGeometry(def.size, 0);
-    else geo = new THREE.TetrahedronGeometry(def.size);
-    const mat = new THREE.MeshBasicMaterial({
-      color: type === 'armored' ? new THREE.Color('#c22343') : COL_ROSE,
-      wireframe: true, transparent: true, opacity: 0.95,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
     const n0 = this.grid.cells[fromCell].center;
     // 横向散布：随机切向偏移，让同舱部队铺开成松散团
     const rt = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5).normalize();
     const offset = new THREE.Vector3().crossVectors(n0, rt).normalize()
       .multiplyScalar(this.rand() * 0.024);
     const pos = n0.clone().add(offset).normalize().multiplyScalar(1.02);
-    mesh.position.copy(pos);
-    this.root.add(mesh);
     this.units.push({
-      type, def, mesh, path, seg: 0, t: 0, hp: Math.round(def.hp * this.hpMul()),
-      alive: true, pos: pos.clone(),
+      type, def, path, seg: 0, t: 0, hp: Math.round(def.hp * this.hpMul()),
+      alive: true, pos,
       slowUntilFrame: false, offset, speedMul: 0.85 + this.rand() * 0.3,
+      spin: this.rand() * Math.PI * 2,
     });
   }
 
@@ -1461,16 +1474,12 @@ export class Game {
         }
       }
       u.pos.copy(from).lerp(to, u.t).add(u.offset).normalize().multiplyScalar(1.02);
-      u.mesh.position.copy(u.pos);
-      u.mesh.rotation.x += dt * 3.1;
-      u.mesh.rotation.y += dt * 2.3;
     }
     this.units = this.units.filter((u) => u.alive);
   }
 
   private killUnit(u: Unit, reward: boolean) {
     u.alive = false;
-    this.root.remove(u.mesh);
     this.spawnRing(u.pos.clone(), reward ? COL_CYAN : COL_ROSE, 0.045);
     if (reward) {
       this.energy += u.def.reward;
