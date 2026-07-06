@@ -32,6 +32,8 @@ export const TOWER_DEFS: TowerDef[] = [
   { key: 'satellite', name: '防御卫星', sub: 'SAT-NET', icon: '✧', cost: 260, kind: 'air',     range: 0.55, damage: 16, cooldown: 0.55, desc: '部署轨道卫星环球巡航' },
   { key: 'gatling',   name: '加特林',   sub: 'GATLING', icon: '≡', cost: 130, kind: 'ground',  range: 0.33, damage: 9,  cooldown: 0.14, desc: '超高射速·割草基干' },
   { key: 'plasma',    name: '等离子灼烧', sub: 'PLASMA', icon: '✺', cost: 180, kind: 'ground', range: 0.24, damage: 8,  cooldown: 0.22, desc: '持续灼烧射程内全部敌人' },
+  { key: 'reactor',   name: '能源反应堆', sub: 'REACTOR', icon: '⌬', cost: 150, kind: 'support', range: 0, damage: 0, cooldown: 0,   desc: '+2.5⚡/s·用地换经济' },
+  { key: 'railgun',   name: '轨道重炮', sub: 'RAILGUN', icon: '✛', cost: 320, kind: 'ground',  range: 0.9,  damage: 95, cooldown: 8,   desc: '全球压制·天降光柱轰击敌群' },
 ];
 
 const OCEAN_PLATFORM_COST = 60;   // 海上浮动平台附加费
@@ -52,7 +54,10 @@ const GROUND_DEFS: Record<string, GroundDef> = {
   swarmling: { hp: 16,  speed: 0.09,  armor: 0, reward: 3,  size: 0.012 }, // 裂变产物
   crawler:   { hp: 12,  speed: 0.052, armor: 0, reward: 2,  size: 0.014 }, // 爬行者：纯数量的尸潮单位
   behemoth:  { hp: 550, speed: 0.026, armor: 10, reward: 55, size: 0.042 }, // 攻城巨兽：无视城市，专拆防御塔
+  shrieker:  { hp: 60,  speed: 0.068, armor: 0,  reward: 12, size: 0.022 }, // 尖啸者：死亡尖啸使周围敌群加速
 };
+const SHRIEK_RADIUS = 0.13;
+const SHRIEK_HASTE = 4; // 加速持续秒数
 const BEHEMOTH_DPS_INTERVAL = 1.2;
 const BEHEMOTH_HIT = 28;
 const BEHEMOTH_CITY_DAMAGE = 30; // 无塔可拆时才去撞城
@@ -143,6 +148,7 @@ interface Unit {
   spin: number;           // 自旋相位（实例化渲染用）
   targetTower: number;    // 攻城巨兽当前目标塔的格子 id（-1 = 无/走向城市）
   attackT: number;        // 拆塔攻击间隔计时
+  hasteT: number;         // 尖啸者死亡加速的剩余时间
 }
 
 interface Satellite {
@@ -224,6 +230,7 @@ export class Game {
       swarmling: new InstancePool(this.root, new THREE.TetrahedronGeometry(D.swarmling.size), COL_ROSE, 512),
       crawler: new InstancePool(this.root, new THREE.BoxGeometry(D.crawler.size, D.crawler.size * 0.55, D.crawler.size), COL_ROSE, 640),
       behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
+      shrieker: new InstancePool(this.root, new THREE.ConeGeometry(D.shrieker.size * 0.8, D.shrieker.size * 2.4, 5), '#ff4d7d', 128),
     };
     this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 256);
     this.spawnCities();
@@ -280,6 +287,10 @@ export class Game {
     // 攻城巨兽：波 10 起零星出现，飞船潮必带
     if (i >= 9 && (tide || i % 5 === 4)) {
       drops.push({ type: 'behemoth', n: Math.max(1, Math.ceil((i - 8) / 6)) * (tide ? 2 : 1) });
+    }
+    // 尖啸者：波 7 起混入尸潮
+    if (i >= 6 && (tide || i % 3 === 1)) {
+      drops.push({ type: 'shrieker', n: Math.ceil((i - 3) / 5) });
     }
     return {
       prewave: tide ? 30 : i === 0 ? 20 : Math.max(13, 24 - i * 0.5),
@@ -781,6 +792,40 @@ export class Game {
         group.add(orb);
         group.userData.muzzle = orb;
         bob.push({ obj: orb, base: 0.072, amp: 0.005, freq: 3.1 });
+        break;
+      }
+      case 'reactor': {
+        // 六方反应堆：环形壳体 + 琥珀能量核心 + 双转子
+        addPart(new THREE.CylinderGeometry(0.02, 0.024, 0.026, 6), 0.013);
+        const core2 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.011, 0),
+          new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+        core2.position.y = 0.042;
+        group.add(core2);
+        group.userData.muzzle = core2;
+        spin.push({ obj: core2, axis: 'y', speed: 2.2 });
+        const rr1 = mkRing(0.02, 0.042, 0.0022);
+        const rr2 = mkRing(0.016, 0.052, 0.0022);
+        spin.push({ obj: rr1, axis: 'z', speed: -1.2 }, { obj: rr2, axis: 'z', speed: 1.8 });
+        bob.push({ obj: core2, base: 0.042, amp: 0.005, freq: 2.6 });
+        break;
+      }
+      case 'railgun': {
+        // 重炮平台：宽八角基座 + 双联主炮管指天
+        addPart(new THREE.CylinderGeometry(0.022, 0.027, 0.022, 8), 0.011);
+        for (const side of [-1, 1]) {
+          const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.006, 0.095, 6), fill);
+          barrel.position.set(side * 0.009, 0.06, 0);
+          group.add(barrel);
+          const be2 = new THREE.LineSegments(new THREE.EdgesGeometry(barrel.geometry), edgeM);
+          be2.position.copy(barrel.position);
+          group.add(be2); edges.push(be2);
+        }
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.007, 8, 8),
+          new THREE.MeshBasicMaterial({ color: COL_AMBER, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false }));
+        tip.position.y = 0.112;
+        group.add(tip);
+        group.userData.muzzle = tip;
+        ring = mkRing(0.024, 0.02);
         break;
       }
       case 'gatling': {
@@ -1545,7 +1590,7 @@ export class Game {
       alive: true, pos,
       slowUntilFrame: false, offset, speedMul: 0.85 + this.rand() * 0.3,
       spin: this.rand() * Math.PI * 2,
-      targetTower: -1, attackT: 0,
+      targetTower: -1, attackT: 0, hasteT: 0,
     });
     // 攻城巨兽落地即锁定最近的防御塔
     if (type === 'behemoth') this.retargetBehemoth(this.units[this.units.length - 1]);
@@ -1595,7 +1640,8 @@ export class Game {
         continue;
       }
 
-      let speed = u.def.speed * u.speedMul;
+      if (u.hasteT > 0) u.hasteT -= dt;
+      let speed = u.def.speed * u.speedMul * (u.hasteT > 0 ? 1.6 : 1);
       for (const ts of teslas) {
         if (this.grid.cells[ts.cellId].center.angleTo(u.pos) < this.towerRange(ts)) {
           speed *= 0.6 - (ts.level - 1) * 0.08;
@@ -1649,6 +1695,15 @@ export class Game {
   private killUnit(u: Unit, reward: boolean) {
     u.alive = false;
     this.spawnRing(u.pos.clone(), reward ? COL_CYAN : COL_ROSE, 0.045);
+    // 尖啸者：死亡尖啸，周围敌群短暂狂暴加速
+    if (u.type === 'shrieker') {
+      for (const v of this.units) {
+        if (!v.alive || v === u) continue;
+        if (v.pos.distanceTo(u.pos) < SHRIEK_RADIUS) v.hasteT = SHRIEK_HASTE;
+      }
+      this.spawnRing(u.pos.clone(), COL_ROSE, 0.09);
+      sfx.play('jam', 200);
+    }
     if (reward) {
       this.energy += u.def.reward;
       this.stats.kills++;
@@ -1769,7 +1824,7 @@ export class Game {
         }
         continue;
       }
-      if (tw.def.key === 'radar') continue; // 增益塔不攻击
+      if (tw.def.key === 'radar' || tw.def.key === 'reactor') continue; // 增益/经济塔不攻击
       if (tw.def.key === 'satellite') continue; // 攻击由在轨卫星执行
 
       tw.cooldown -= dt * rateMul;
@@ -1793,6 +1848,35 @@ export class Game {
         continue;
       }
 
+      if (tw.def.key === 'railgun') {
+        // 轨道重炮：锁定地面最密集的敌群，天降光柱范围轰击
+        let target: Unit | null = null; let bestScore = 0;
+        const stride = Math.max(1, Math.floor(this.units.length / 60)); // 采样防 O(n²)
+        for (let ui = 0; ui < this.units.length; ui += stride) {
+          const u = this.units[ui];
+          if (!u.alive || towerN.angleTo(u.pos) > range) continue;
+          let score = 0;
+          for (const v of this.units) { if (v.alive && v.pos.distanceTo(u.pos) < 0.09) score++; }
+          if (score > bestScore) { bestScore = score; target = u; }
+        }
+        if (!target) continue;
+        tw.cooldown = tw.def.cooldown;
+        const hit = target.pos.clone();
+        // 天降光柱：从高空垂直劈下
+        this.spawnBeam(hit.clone().normalize().multiplyScalar(1.45), hit, 0.01, COL_AMBER);
+        this.spawnFlash(hit, COL_AMBER, 0.035, 0.4);
+        this.spawnRing(hit, COL_AMBER, 0.09);
+        sfx.play('intercept', 0);
+        const dmg = this.towerDamage(tw);
+        for (const v of this.units) {
+          if (!v.alive) continue;
+          if (v.pos.distanceTo(hit) < 0.09) {
+            v.hp -= Math.max(1, dmg - v.def.armor);
+            if (v.hp <= 0) this.killUnit(v, true);
+          }
+        }
+        continue;
+      }
       if (tw.def.key === 'plasma') {
         // 等离子灼烧：射程内全体持续掉血，天生的尸潮克星
         tw.cooldown = tw.def.cooldown;
@@ -2161,7 +2245,10 @@ export class Game {
   incomeRate(): number {
     const alive = this.cities.filter((c) => c.alive).length;
     let rate = alive * CITY_INCOME * this.cityNetworkMul();
-    for (const t of this.towers) if (t.perk?.key === 'siphon') rate += 1.5;
+    for (const t of this.towers) {
+      if (t.perk?.key === 'siphon') rate += 1.5;
+      if (t.def.key === 'reactor') rate += 2.5 * (1 + (t.level - 1) * 0.6);
+    }
     return rate;
   }
 

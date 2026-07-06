@@ -255,6 +255,16 @@
     }
     #menu-sub { margin-top: 12px; font-size: 13px; letter-spacing: 8px; color: var(--cyan-dim); }
     #menu-flavor { margin-top: 30px; font-size: 12px; letter-spacing: 3px; color: rgba(251, 191, 36, 0.75); min-height: 18px; }
+    #chapter-tabs { margin-top: 20px; display: flex; gap: 12px; }
+    .ch-tab {
+      padding: 8px 22px; cursor: pointer; font-family: inherit;
+      font-size: 12px; letter-spacing: 4px; color: var(--cyan-dim);
+      background: transparent; border: 1px solid var(--cyan-faint);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      transition: all 0.15s;
+    }
+    .ch-tab:hover { color: var(--cyan); }
+    .ch-tab.active { color: var(--amber); border-color: rgba(251, 191, 36, 0.5); box-shadow: 0 0 12px rgba(251, 191, 36, 0.2); }
     #level-grid {
       margin-top: 22px; display: grid; grid-template-columns: repeat(4, 148px); gap: 12px;
     }
@@ -425,6 +435,10 @@
     <div id="menu-title">寰宇防线</div>
     <div id="menu-sub">EARTH DEFENSE // ORBITAL COMMAND</div>
     <div id="menu-flavor"></div>
+    <div id="chapter-tabs">
+      <button class="ch-tab active" data-ch="1">章节一 · 抵抗篇</button>
+      <button class="ch-tab" data-ch="2">章节二 · 怪潮篇</button>
+    </div>
     <div id="level-grid"></div>
     <div style="display:flex; gap:14px; margin-top:34px;">
       <button class="big-btn primary" id="menu-start">开始作战 // ENGAGE</button>

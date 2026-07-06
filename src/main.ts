@@ -404,24 +404,39 @@ const TUTORIAL_STEPS = [
   const menu = document.getElementById('menu')!;
   const gridEl = document.getElementById('level-grid')!;
   const flavorEl = document.getElementById('menu-flavor')!;
-  for (const lv of LEVELS) {
-    const locked = lv.id > progress.unlocked;
-    const stars = progress.stars[lv.id] ?? 0;
-    const card = document.createElement('div');
-    card.className = 'lv-card' + (locked ? ' locked' : '');
-    card.innerHTML = `
-      <div class="lv-num">MISSION ${String(lv.id).padStart(2, '0')}${locked ? ' 🔒' : ''}</div>
-      <div class="lv-name">${lv.name}</div>
-      <div class="lv-stars">${stars ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : locked ? '' : '未通关'}</div>`;
-    card.addEventListener('mouseenter', () => { if (!locked) flavorEl.textContent = lv.flavor; });
-    card.addEventListener('click', () => {
-      if (locked) { sfx.play('deny'); return; }
-      sfx.play('click');
-      setSession(lv.id, true);
-      location.reload();
-    });
-    gridEl.appendChild(card);
+
+  function renderChapter(ch: number) {
+    gridEl.innerHTML = '';
+    for (const lv of LEVELS) {
+      if (lv.chapter !== ch) continue;
+      const locked = lv.id > progress.unlocked;
+      const stars = progress.stars[lv.id] ?? 0;
+      const card = document.createElement('div');
+      card.className = 'lv-card' + (locked ? ' locked' : '');
+      card.innerHTML = `
+        <div class="lv-num">MISSION ${String(lv.id).padStart(2, '0')}${locked ? ' 🔒' : ''}</div>
+        <div class="lv-name">${lv.name}</div>
+        <div class="lv-stars">${stars ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : locked ? '' : '未通关'}</div>`;
+      card.addEventListener('mouseenter', () => { if (!locked) flavorEl.textContent = lv.flavor; });
+      card.addEventListener('click', () => {
+        if (locked) { sfx.play('deny'); return; }
+        sfx.play('click');
+        setSession(lv.id, true);
+        location.reload();
+      });
+      gridEl.appendChild(card);
+    }
   }
+  const tabs = document.querySelectorAll<HTMLElement>('.ch-tab');
+  tabs.forEach((tab) => tab.addEventListener('click', () => {
+    sfx.play('click');
+    tabs.forEach((t) => t.classList.toggle('active', t === tab));
+    renderChapter(Number(tab.dataset.ch));
+  }));
+  // 默认展示进度所在的章节
+  const curCh = !isEndless && level.chapter === 2 ? 2 : (progress.unlocked > 8 ? 2 : 1);
+  tabs.forEach((t) => t.classList.toggle('active', Number(t.dataset.ch) === curCh));
+  renderChapter(curCh);
   document.getElementById('menu-start')!.addEventListener('click', () => {
     sfx.play('click');
     if (levelId === progress.unlocked && !session.autostart && !isEndless) {
