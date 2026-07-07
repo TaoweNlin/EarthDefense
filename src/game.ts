@@ -1467,17 +1467,17 @@ export class Game {
       const rollDepth = n * 0.015; // 海浪厚度：随数量拉长，持续席卷
       this.prevWing = null; // 骨架链按锋面隔断
       for (let i = 0; i < n; i++) {
-        // 出生面：双随机近似高斯的宽幕（±0.55），中密边疏
-        const spread = (this.rand() + this.rand() - 1) * 0.55;
-        const spread2 = (this.rand() + this.rand() - 1) * 0.4;
+        // 出生面：双随机近似高斯的超宽幕（±0.85），中密边疏，覆盖大半个半球
+        const spread = (this.rand() + this.rand() - 1) * 0.85;
+        const spread2 = (this.rand() + this.rand() - 1) * 0.6;
         const dir = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
         // 目标也散布在城市周边一片区域：中途保持海面宽度，末段才收拢
         const tgt = cityDir.clone()
-          .addScaledVector(e1, (this.rand() - 0.5) * 0.3)
-          .addScaledVector(e2, (this.rand() - 0.5) * 0.3).normalize();
+          .addScaledVector(e1, (this.rand() - 0.5) * 0.45)
+          .addScaledVector(e2, (this.rand() - 0.5) * 0.45).normalize();
         this.spawnWingUnit(dir, city.cellId, WING_ALT,
-          this.rand() * rollDepth,
-          1.2 + this.rand() * 0.18, tgt);
+          this.rand() * rollDepth * 1.3,
+          1.2 + this.rand() * 0.2, tgt);
       }
     }
   }
@@ -1673,10 +1673,10 @@ export class Game {
               for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
                 // 出生即散开成一片：宽幕喷涌 + 目标散布城市周边
                 const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
-                  .multiplyScalar(0.32);
+                  .multiplyScalar(0.5);
                 const tgt = cityDir2.clone()
-                  .addScaledVector(te1, (this.rand() - 0.5) * 0.3)
-                  .addScaledVector(te2, (this.rand() - 0.5) * 0.3).normalize();
+                  .addScaledVector(te1, (this.rand() - 0.5) * 0.45)
+                  .addScaledVector(te2, (this.rand() - 0.5) * 0.45).normalize();
                 this.spawnWingUnit(
                   o.orbitAxis.clone().add(jitter).normalize(), city.cellId,
                   HIVE_RADIUS, this.rand() * HIVE_SQUAD_SIZE * 0.02,
