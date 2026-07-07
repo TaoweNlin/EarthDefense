@@ -282,6 +282,29 @@
     .lv-stars { font-size: 11px; margin-top: 5px; color: var(--amber); letter-spacing: 3px; min-height: 14px; }
     #endless-best { color: var(--amber); font-size: 11px; }
 
+    /* ===== 无尽模式开局设置 ===== */
+    #endless-cfg {
+      display: none; margin-top: 22px; padding: 18px 22px;
+      background: var(--panel-bg); border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+      text-align: left; min-width: 480px;
+    }
+    #endless-cfg.show { display: block; }
+    .ec-row { margin-bottom: 14px; }
+    .ec-label { font-size: 11px; letter-spacing: 3px; color: var(--cyan-dim); margin-bottom: 8px; }
+    .ec-opts { display: flex; gap: 10px; }
+    .ec-opt {
+      flex: 1; padding: 9px 12px; cursor: pointer; font-family: inherit; text-align: center;
+      font-size: 13px; letter-spacing: 2px; color: var(--cyan-dim);
+      background: transparent; border: 1px solid var(--cyan-faint);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      transition: all 0.15s;
+    }
+    .ec-opt:hover { color: var(--cyan); }
+    .ec-opt.sel { color: var(--amber); border-color: rgba(251, 191, 36, 0.55); box-shadow: 0 0 10px rgba(251, 191, 36, 0.2); }
+    #ec-desc { font-size: 11px; letter-spacing: 1px; color: rgba(251, 191, 36, 0.7); min-height: 15px; margin-bottom: 14px; }
+    #ec-start { width: 100%; }
+
     /* ===== 教学提示 ===== */
     #tutorial {
       position: fixed; bottom: 190px; left: 50%; transform: translateX(-50%);
@@ -443,6 +466,18 @@
     <div style="display:flex; gap:14px; margin-top:34px;">
       <button class="big-btn primary" id="menu-start">开始作战 // ENGAGE</button>
       <button class="big-btn" id="menu-endless">无尽模式 <span id="endless-best"></span></button>
+    </div>
+    <div id="endless-cfg">
+      <div class="ec-row">
+        <div class="ec-label">难度 DIFFICULTY</div>
+        <div class="ec-opts" id="ec-diff"></div>
+      </div>
+      <div class="ec-row">
+        <div class="ec-label">虫潮规模 SWARM SCALE</div>
+        <div class="ec-opts" id="ec-swarm"></div>
+      </div>
+      <div id="ec-desc"></div>
+      <button class="big-btn primary" id="ec-start">出击 // LAUNCH</button>
     </div>
   </div>
 

@@ -67,8 +67,8 @@ const BEHEMOTH_CITY_DAMAGE = 30; // 无塔可拆时才去撞城
 const HORDE_MUL = 1.5;
 
 // 空中单位（立体防御的主角，只能被防空火力击落）
-const WING_HP = 9;             // 飞行蜂群：极脆、海量，给全防线当割草靶
-const WING_REWARD = 1;
+const WING_HP = 20;            // 飞行蜂群：有一定韧性，防空需要认真投入
+const WING_REWARD = 2;
 const WING_SPEED = 0.055;      // 角速度 rad/s，缓慢推进
 const WING_ALT = 1.27;         // 巡航高度：高空层，强化体积感
 const WING_IMPACT_DAMAGE = 1;
@@ -289,7 +289,9 @@ export class Game {
    *  无尽的后期原则：数量不设上限、空中压力优先膨胀，用巨量敌群压制成型的防线。 */
   private waveAt(i: number): WaveCfg {
     if (!this.cfg.endless) return this.cfg.waves[i];
-    // 前 3~4 波是热身，之后陡增；后期数量不设上限
+    // 前 3~4 波是热身，之后陡增；后期数量不设上限。
+    // tuning 由开局设置（难度 × 虫潮规模）合成。
+    const tun = this.cfg.tuning ?? { countMul: 1, hpGrow: 0.1, prewaveAdd: 0, wingMul: 1, energyAdd: 0, jammerAdd: 0 };
     const types = ['swarm', 'crawler', 'runner', 'armored', 'splitter'] as const;
     const tide = i > 0 && (i + 1) % 10 === 0; // 每 10 波一次飞船潮
     const drops: WaveCfg['drops'] = [];
@@ -299,14 +301,14 @@ export class Game {
       const type = types[(i + d * 2) % types.length];
       const base = 5 + i * 1.5;
       // 爬行者是纯数量单位，双倍装载
-      const n = (type === 'armored' ? base * 0.5 : type === 'crawler' ? base * 2 : base) * tideMul;
+      const n = (type === 'armored' ? base * 0.5 : type === 'crawler' ? base * 2 : base) * tideMul * tun.countMul;
       drops.push({ type, n: Math.round(n) });
     }
     // 攻城巨兽：波 10 起零星出现，飞船潮必带
     if (i >= 9 && (tide || i % 5 === 4)) {
       drops.push({ type: 'behemoth', n: Math.max(1, Math.ceil((i - 8) / 6)) * (tide ? 2 : 1) });
     }
-    // 尖啸者：波 7 起混入尸潮
+    // 尖啸者：波 7 起混入虫潮
     if (i >= 6 && (tide || i % 3 === 1)) {
       drops.push({ type: 'shrieker', n: Math.ceil((i - 3) / 5) });
     }
@@ -315,12 +317,12 @@ export class Game {
       drops[0] = { ...drops[0], heavy: true };
     }
     return {
-      prewave: tide ? 40 : i === 0 ? 28 : Math.max(18, 30 - i * 0.5),
+      prewave: Math.max(12, (tide ? 40 : i === 0 ? 28 : Math.max(18, 30 - i * 0.5)) + tun.prewaveAdd),
       drops,
-      jammers: i >= 4 ? Math.min(4, Math.floor(i / 4)) : 0,
+      jammers: (i >= 4 ? Math.min(4, Math.floor(i / 4)) : 0) + (i >= 6 ? tun.jammerAdd : 0),
       divers: (i >= 4 ? Math.floor((i - 2) / 2) : 0) * tideMul,
       gunships: (i >= 6 ? Math.floor((i - 3) / 3) : 0) * tideMul,
-      wings: (i >= 3 ? Math.round(40 + (i - 2) * 20) : 0) * tideMul,
+      wings: Math.round((i >= 3 ? 40 + (i - 2) * 20 : 0) * tideMul * tun.wingMul),
       hives: tide && i >= 9 ? Math.min(3, Math.floor(i / 10)) : (i >= 13 && i % 6 === 5 ? 1 : 0),
       boss: i > 0 && i % 8 === 7, // 每 8 波一艘母舰
       tide,
@@ -331,9 +333,11 @@ export class Game {
     return this.cfg.endless ? Infinity : this.cfg.waves.length;
   }
 
-  /** 无尽模式敌人血量随波数膨胀（第 4 波起计），对冲玩家防线的指数成长 */
+  /** 无尽模式敌人血量随波数膨胀（第 4 波起计），膨胀率由难度设置决定 */
   private hpMul(): number {
-    return this.cfg.endless ? 1 + Math.max(0, this.launched - 3) * 0.1 : 1;
+    if (!this.cfg.endless) return 1;
+    const grow = this.cfg.tuning?.hpGrow ?? 0.1;
+    return 1 + Math.max(0, this.launched - 3) * grow;
   }
 
   /** 固定进攻走廊：整关的登陆都发生在这些走廊附近，开局即可见 */
@@ -1226,7 +1230,8 @@ export class Game {
     cfg.drops.forEach((drop, i) => {
       const p = this.pending[i];
       const cargo = { type: drop.type, n: Math.round(drop.n * HORDE_MUL) };
-      this.spawnTransport(p.cellId, cargo, i * 2.2, p.marker, false, { u: p.u, trail: p.trail }, drop.heavy);
+      // 拉开运输舱到达节奏：整个波次窗口内持续有敌情，不空场
+      this.spawnTransport(p.cellId, cargo, i * 3.4, p.marker, false, { u: p.u, trail: p.trail }, drop.heavy);
     });
     this.markers = [];
     this.pending = [];
@@ -1464,7 +1469,7 @@ export class Game {
       const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
 
       const n = Math.min(per, count - r * per);
-      const rollDepth = n * 0.015; // 海浪厚度：随数量拉长，持续席卷
+      const rollDepth = n * 0.028; // 海浪厚度：拉长倾泻时间，保证波次持续性不空场
       this.prevWing = null; // 骨架链按锋面隔断
       for (let i = 0; i < n; i++) {
         // 出生面：双随机近似高斯的超宽幕（±0.85），中密边疏，覆盖大半个半球

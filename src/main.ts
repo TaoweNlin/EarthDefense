@@ -4,7 +4,11 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { buildGoldberg, type Cell } from './goldberg';
 import { Game, TOWER_DEFS, type GameStats } from './game';
-import { LEVELS, ENDLESS_LEVEL, loadProgress, saveProgress, getSession, setSession } from './levels';
+import {
+  LEVELS, ENDLESS_LEVEL, loadProgress, saveProgress, getSession, setSession,
+  DIFF_PRESETS, SWARM_PRESETS, loadEndlessCfg, saveEndlessCfg, buildEndlessTuning,
+  type EndlessDiff, type EndlessSwarm,
+} from './levels';
 import { sfx } from './sound';
 
 // ---------- 关卡会话 ----------
@@ -18,7 +22,14 @@ const session = getSession();
 const isEndless = session.level === ENDLESS_LEVEL.id;
 const levelId = isEndless ? ENDLESS_LEVEL.id
   : Math.min(Math.max(1, session.level), progress.unlocked, LEVELS.length);
-const level = isEndless ? ENDLESS_LEVEL : LEVELS[levelId - 1];
+const endlessCfg = loadEndlessCfg();
+const level = isEndless
+  ? {
+    ...ENDLESS_LEVEL,
+    tuning: buildEndlessTuning(endlessCfg),
+    startEnergy: ENDLESS_LEVEL.startEnergy + buildEndlessTuning(endlessCfg).energyAdd,
+  }
+  : LEVELS[levelId - 1];
 
 // ---------- 常量 ----------
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -453,18 +464,46 @@ const TUTORIAL_STEPS = [
       location.reload();
     }
   });
-  // 无尽模式入口
+  // 无尽模式入口：先展开开局设置（难度 × 虫潮规模），出击才开战
   document.getElementById('endless-best')!.textContent =
     progress.endlessBest > 0 ? `· 最佳 ${progress.endlessBest} 波` : '';
+  const ecPanel = document.getElementById('endless-cfg')!;
+  const ecDesc = document.getElementById('ec-desc')!;
+  const ecSel = { ...endlessCfg };
+
+  function renderEcOpts() {
+    const diffEl = document.getElementById('ec-diff')!;
+    const swarmEl = document.getElementById('ec-swarm')!;
+    diffEl.innerHTML = ''; swarmEl.innerHTML = '';
+    (Object.keys(DIFF_PRESETS) as EndlessDiff[]).forEach((k) => {
+      const b = document.createElement('button');
+      b.className = 'ec-opt' + (ecSel.diff === k ? ' sel' : '');
+      b.textContent = DIFF_PRESETS[k].label;
+      b.addEventListener('click', () => { sfx.play('click'); ecSel.diff = k; renderEcOpts(); });
+      b.addEventListener('mouseenter', () => { ecDesc.textContent = DIFF_PRESETS[k].desc; });
+      diffEl.appendChild(b);
+    });
+    (Object.keys(SWARM_PRESETS) as EndlessSwarm[]).forEach((k) => {
+      const b = document.createElement('button');
+      b.className = 'ec-opt' + (ecSel.swarm === k ? ' sel' : '');
+      b.textContent = SWARM_PRESETS[k].label;
+      b.addEventListener('click', () => { sfx.play('click'); ecSel.swarm = k; renderEcOpts(); });
+      b.addEventListener('mouseenter', () => { ecDesc.textContent = SWARM_PRESETS[k].desc; });
+      swarmEl.appendChild(b);
+    });
+    ecDesc.textContent = `${DIFF_PRESETS[ecSel.diff].desc} · ${SWARM_PRESETS[ecSel.swarm].desc}`;
+  }
+  renderEcOpts();
+
   document.getElementById('menu-endless')!.addEventListener('click', () => {
     sfx.play('click');
-    if (isEndless && !session.autostart) {
-      menu.classList.remove('show');
-      startBattle();
-    } else {
-      setSession(ENDLESS_LEVEL.id, true);
-      location.reload();
-    }
+    ecPanel.classList.toggle('show');
+  });
+  document.getElementById('ec-start')!.addEventListener('click', () => {
+    sfx.play('click');
+    saveEndlessCfg(ecSel);
+    setSession(ENDLESS_LEVEL.id, true);
+    location.reload();
   });
   if (session.autostart) {
     setSession(levelId, false); // 消费一次性自动开始标记

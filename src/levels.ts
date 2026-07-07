@@ -35,6 +35,60 @@ export interface LevelCfg {
   towers: string[];
   waves: WaveCfg[];
   endless?: boolean;      // 无尽模式：波次程序生成，难度递增
+  tuning?: EndlessTuning; // 无尽模式开局设置产生的调参
+}
+
+/** 无尽模式调参（由开局的难度 × 虫潮规模设置合成） */
+export interface EndlessTuning {
+  countMul: number;   // 地面兵力倍率
+  hpGrow: number;     // 每波血量膨胀率
+  prewaveAdd: number; // 波间隔修正（秒）
+  wingMul: number;    // 虫潮规模倍率
+  energyAdd: number;  // 起始能源修正
+  jammerAdd: number;  // 后期额外干扰者
+}
+
+export type EndlessDiff = 'easy' | 'normal' | 'hard';
+export type EndlessSwarm = 'normal' | 'big' | 'max';
+
+/** 难度：轻松 = 割草爽；残酷 = 资源规划与布局的考验 */
+export const DIFF_PRESETS: Record<EndlessDiff, { label: string; desc: string; tun: Partial<EndlessTuning> }> = {
+  easy:   { label: '轻松', desc: '割草解压 · 敌军血薄兵少、间隔宽裕',
+    tun: { countMul: 0.7, hpGrow: 0.05, prewaveAdd: 6, energyAdd: 120, jammerAdd: 0 } },
+  normal: { label: '标准', desc: '常规压力曲线',
+    tun: { countMul: 1.0, hpGrow: 0.10, prewaveAdd: 0, energyAdd: 0, jammerAdd: 0 } },
+  hard:   { label: '残酷', desc: '兵多血厚间隔短 · 考验资源规划与布局',
+    tun: { countMul: 1.35, hpGrow: 0.14, prewaveAdd: -5, energyAdd: 0, jammerAdd: 1 } },
+};
+
+/** 虫潮规模：最大档后期波次会刷满 50 万只级别的虫海 */
+export const SWARM_PRESETS: Record<EndlessSwarm, { label: string; desc: string; wingMul: number }> = {
+  normal: { label: '适中',     desc: '虫潮作为战场点缀', wingMul: 1 },
+  big:    { label: '大量',     desc: '天空经常被遮蔽',   wingMul: 2.5 },
+  max:    { label: '铺天盖地', desc: '后期百万虫海淹没星球（性能要求高）', wingMul: 6 },
+};
+
+export interface EndlessCfg { diff: EndlessDiff; swarm: EndlessSwarm }
+const ENDLESS_CFG_KEY = 'earthdef-endless-cfg';
+
+export function loadEndlessCfg(): EndlessCfg {
+  try {
+    const raw = localStorage.getItem(ENDLESS_CFG_KEY);
+    if (raw) return { diff: 'normal', swarm: 'normal', ...JSON.parse(raw) };
+  } catch { /* ignore */ }
+  return { diff: 'normal', swarm: 'normal' };
+}
+
+export function saveEndlessCfg(c: EndlessCfg) {
+  localStorage.setItem(ENDLESS_CFG_KEY, JSON.stringify(c));
+}
+
+export function buildEndlessTuning(c: EndlessCfg): EndlessTuning {
+  return {
+    countMul: 1, hpGrow: 0.1, prewaveAdd: 0, energyAdd: 0, jammerAdd: 0,
+    ...DIFF_PRESETS[c.diff].tun,
+    wingMul: SWARM_PRESETS[c.swarm].wingMul,
+  };
 }
 
 const T1 = ['pulse'];
@@ -77,9 +131,9 @@ export const LEVELS: LevelCfg[] = [
     landingSpread: 1.4, lanes: 2, startEnergy: 320, towers: T3,
     waves: [
       { prewave: 24, drops: [{ type: 'swarm', n: 12 }] },
-      { prewave: 30, drops: [{ type: 'swarm', n: 14 }, { type: 'runner', n: 8 }], wings: 80 },
-      { prewave: 30, drops: [{ type: 'armored', n: 5 }, { type: 'swarm', n: 12 }], divers: 1, wings: 100 },
-      { prewave: 32, drops: [{ type: 'armored', n: 7 }, { type: 'runner', n: 10 }, { type: 'swarm', n: 14 }], divers: 2, wings: 120 },
+      { prewave: 30, drops: [{ type: 'swarm', n: 14 }, { type: 'runner', n: 8 }], wings: 40 },
+      { prewave: 30, drops: [{ type: 'armored', n: 5 }, { type: 'swarm', n: 12 }], divers: 1, wings: 50 },
+      { prewave: 32, drops: [{ type: 'armored', n: 7 }, { type: 'runner', n: 10 }, { type: 'swarm', n: 14 }], divers: 2, wings: 60 },
     ],
   },
   {
@@ -89,10 +143,10 @@ export const LEVELS: LevelCfg[] = [
     landingSpread: 1.6, lanes: 2, startEnergy: 320, towers: T4,
     waves: [
       { prewave: 24, drops: [{ type: 'swarm', n: 14 }] },
-      { prewave: 30, drops: [{ type: 'runner', n: 12 }], jammers: 1, wings: 80 },
+      { prewave: 30, drops: [{ type: 'runner', n: 12 }], jammers: 1, wings: 40 },
       { prewave: 30, drops: [{ type: 'armored', n: 7 }, { type: 'swarm', n: 14 }] },
-      { prewave: 30, drops: [{ type: 'swarm', n: 16 }, { type: 'runner', n: 10 }], jammers: 1, wings: 120 },
-      { prewave: 32, drops: [{ type: 'armored', n: 9 }, { type: 'swarm', n: 14 }, { type: 'runner', n: 8 }], wings: 100 },
+      { prewave: 30, drops: [{ type: 'swarm', n: 16 }, { type: 'runner', n: 10 }], jammers: 1, wings: 60 },
+      { prewave: 32, drops: [{ type: 'armored', n: 9 }, { type: 'swarm', n: 14 }, { type: 'runner', n: 8 }], wings: 50 },
     ],
   },
   {
@@ -103,14 +157,14 @@ export const LEVELS: LevelCfg[] = [
     waves: [
       { prewave: 24, drops: [{ type: 'armored', n: 7 }] },
       { prewave: 32, drops: [{ type: 'armored', n: 7 }, { type: 'swarm', n: 14 }], divers: 1 },
-      { prewave: 32, drops: [{ type: 'armored', n: 9 }, { type: 'runner', n: 10 }], gunships: 1, wings: 100 },
+      { prewave: 32, drops: [{ type: 'armored', n: 9 }, { type: 'runner', n: 10 }], gunships: 1, wings: 50 },
       { prewave: 34, drops: [{ type: 'armored', n: 9 }, { type: 'armored', n: 7 }, { type: 'swarm', n: 16 }], divers: 2 },
-      { prewave: 34, drops: [{ type: 'armored', n: 11 }, { type: 'runner', n: 12 }, { type: 'swarm', n: 18 }], gunships: 1, divers: 2, wings: 140 },
+      { prewave: 34, drops: [{ type: 'armored', n: 11 }, { type: 'runner', n: 12 }, { type: 'swarm', n: 18 }], gunships: 1, divers: 2, wings: 70 },
     ],
   },
   {
     id: 6, chapter: 1, name: '流星雨', sub: 'METEOR FALL',
-    flavor: '大量小型登陆舱多点着陆，爬行者尸潮与裂变体轮番扑城。', objective: '抵御疯狂登陆 · 四走廊多线',
+    flavor: '大量小型登陆舱多点着陆，爬行者虫潮与裂变体轮番扑城。', objective: '抵御疯狂登陆 · 四走廊多线',
     seed: 17320508, cities: 2, cityLayout: 'global', cityCluster: 0.4,
     landingSpread: 2.6, lanes: 4, startEnergy: 340, towers: T5,
     waves: [
@@ -118,8 +172,8 @@ export const LEVELS: LevelCfg[] = [
       { prewave: 28, drops: [{ type: 'splitter', n: 7 }, { type: 'crawler', n: 22 }] },
       { prewave: 28, drops: [{ type: 'runner', n: 10 }, { type: 'splitter', n: 7 }, { type: 'crawler', n: 24 }] },
       { prewave: 30, drops: [{ type: 'splitter', n: 9 }, { type: 'armored', n: 7 }, { type: 'swarm', n: 12 }], jammers: 1 },
-      { prewave: 30, drops: [{ type: 'crawler', n: 26 }, { type: 'runner', n: 12 }, { type: 'swarm', n: 12 }, { type: 'swarm', n: 10 }], divers: 2, wings: 100 },
-      { prewave: 32, drops: [{ type: 'splitter', n: 11 }, { type: 'armored', n: 9 }, { type: 'crawler', n: 28 }, { type: 'runner', n: 10 }], divers: 2, wings: 140 },
+      { prewave: 30, drops: [{ type: 'crawler', n: 26 }, { type: 'runner', n: 12 }, { type: 'swarm', n: 12 }, { type: 'swarm', n: 10 }], divers: 2, wings: 50 },
+      { prewave: 32, drops: [{ type: 'splitter', n: 11 }, { type: 'armored', n: 9 }, { type: 'crawler', n: 28 }, { type: 'runner', n: 10 }], divers: 2, wings: 70 },
     ],
   },
   {
@@ -128,12 +182,12 @@ export const LEVELS: LevelCfg[] = [
     seed: 22360679, cities: 2, cityLayout: 'global', cityCluster: 0.2,
     landingSpread: 3.0, lanes: 3, startEnergy: 380, towers: T7,
     waves: [
-      { prewave: 24, drops: [{ type: 'swarm', n: 14 }], jammers: 1, wings: 100 },
-      { prewave: 30, drops: [{ type: 'runner', n: 12 }], jammers: 1, divers: 2, wings: 120 },
-      { prewave: 30, drops: [{ type: 'swarm', n: 18 }], jammers: 2, gunships: 1, wings: 140 },
-      { prewave: 32, drops: [{ type: 'armored', n: 11 }], divers: 3, gunships: 1, wings: 140 },
-      { prewave: 32, drops: [{ type: 'swarm', n: 18 }, { type: 'runner', n: 12 }], jammers: 2, divers: 2, gunships: 1, wings: 160 },
-      { prewave: 34, drops: [{ type: 'armored', n: 13 }, { type: 'swarm', n: 18 }], divers: 3, gunships: 2, wings: 180 },
+      { prewave: 24, drops: [{ type: 'swarm', n: 14 }], jammers: 1, wings: 50 },
+      { prewave: 30, drops: [{ type: 'runner', n: 12 }], jammers: 1, divers: 2, wings: 60 },
+      { prewave: 30, drops: [{ type: 'swarm', n: 18 }], jammers: 2, gunships: 1, wings: 70 },
+      { prewave: 32, drops: [{ type: 'armored', n: 11 }], divers: 3, gunships: 1, wings: 70 },
+      { prewave: 32, drops: [{ type: 'swarm', n: 18 }, { type: 'runner', n: 12 }], jammers: 2, divers: 2, gunships: 1, wings: 80 },
+      { prewave: 34, drops: [{ type: 'armored', n: 13 }, { type: 'swarm', n: 18 }], divers: 3, gunships: 2, wings: 90 },
     ],
   },
   {
@@ -143,27 +197,27 @@ export const LEVELS: LevelCfg[] = [
     landingSpread: 1.6, lanes: 5, startEnergy: 400, towers: T7,
     waves: [
       { prewave: 24, drops: [{ type: 'swarm', n: 16 }, { type: 'runner', n: 10 }] },
-      { prewave: 30, drops: [{ type: 'armored', n: 9 }, { type: 'splitter', n: 7 }], jammers: 1, divers: 1, wings: 100 },
-      { prewave: 30, drops: [{ type: 'runner', n: 14 }, { type: 'swarm', n: 16 }], divers: 2, gunships: 1, wings: 120 },
+      { prewave: 30, drops: [{ type: 'armored', n: 9 }, { type: 'splitter', n: 7 }], jammers: 1, divers: 1, wings: 50 },
+      { prewave: 30, drops: [{ type: 'runner', n: 14 }, { type: 'swarm', n: 16 }], divers: 2, gunships: 1, wings: 60 },
       { prewave: 32, drops: [{ type: 'armored', n: 11 }, { type: 'splitter', n: 9 }], jammers: 2 },
-      { prewave: 32, drops: [{ type: 'runner', n: 14 }, { type: 'swarm', n: 18 }], divers: 3, gunships: 1, wings: 160 },
-      { prewave: 34, drops: [{ type: 'armored', n: 13 }, { type: 'splitter', n: 9 }, { type: 'swarm', n: 18 }], jammers: 1, gunships: 1, wings: 140 },
-      { prewave: 36, drops: [{ type: 'armored', n: 11 }, { type: 'swarm', n: 18 }], divers: 3, wings: 180, boss: true },
+      { prewave: 32, drops: [{ type: 'runner', n: 14 }, { type: 'swarm', n: 18 }], divers: 3, gunships: 1, wings: 80 },
+      { prewave: 34, drops: [{ type: 'armored', n: 13 }, { type: 'splitter', n: 9 }, { type: 'swarm', n: 18 }], jammers: 1, gunships: 1, wings: 70 },
+      { prewave: 36, drops: [{ type: 'armored', n: 11 }, { type: 'swarm', n: 18 }], divers: 3, wings: 90, boss: true },
     ],
   },
 
   // ================= 章节二《怪潮篇》 =================
   // 亿万僵尸式：建设期攒防线 → 末日时钟倒数 → 飞船潮全向压境。
   {
-    id: 9, chapter: 2, name: '尸潮初现', sub: 'FIRST TIDE',
+    id: 9, chapter: 2, name: '虫潮初现', sub: 'FIRST TIDE',
     flavor: '爬行者的数量超出所有预估。能源反应堆已解锁——用地皮换经济。', objective: '割草防线 · 撑过首次飞船潮',
     seed: 61803398, cities: 2, cityLayout: 'cluster', cityCluster: 1.0,
     landingSpread: 1.1, lanes: 2, startEnergy: 360, towers: T8,
     waves: [
       { prewave: 28, drops: [{ type: 'crawler', n: 24 }] },
       { prewave: 30, drops: [{ type: 'crawler', n: 26 }, { type: 'swarm', n: 12 }] },
-      { prewave: 30, drops: [{ type: 'crawler', n: 28 }, { type: 'runner', n: 10 }], wings: 100 },
-      { prewave: 32, drops: [{ type: 'crawler', n: 30 }, { type: 'splitter', n: 8 }], wings: 120 },
+      { prewave: 30, drops: [{ type: 'crawler', n: 28 }, { type: 'runner', n: 10 }], wings: 50 },
+      { prewave: 32, drops: [{ type: 'crawler', n: 30 }, { type: 'splitter', n: 8 }], wings: 60 },
       { prewave: 38, drops: [{ type: 'crawler', n: 34 }, { type: 'crawler', n: 30 }, { type: 'swarm', n: 16 }, { type: 'runner', n: 12 }], wings: 200, divers: 2, tide: true },
     ],
   },
@@ -174,23 +228,23 @@ export const LEVELS: LevelCfg[] = [
     landingSpread: 1.3, lanes: 3, startEnergy: 380, towers: T8,
     waves: [
       { prewave: 28, drops: [{ type: 'crawler', n: 26 }, { type: 'swarm', n: 12 }] },
-      { prewave: 30, drops: [{ type: 'crawler', n: 28 }, { type: 'behemoth', n: 1 }], wings: 100 },
+      { prewave: 30, drops: [{ type: 'crawler', n: 28 }, { type: 'behemoth', n: 1 }], wings: 50 },
       { prewave: 36, drops: [{ type: 'crawler', n: 32 }, { type: 'swarm', n: 16 }, { type: 'runner', n: 12 }], wings: 160, divers: 2, tide: true },
-      { prewave: 32, drops: [{ type: 'crawler', n: 28 }, { type: 'behemoth', n: 2 }], wings: 120 },
-      { prewave: 32, drops: [{ type: 'splitter', n: 10 }, { type: 'armored', n: 8 }], jammers: 1, wings: 140 },
+      { prewave: 32, drops: [{ type: 'crawler', n: 28 }, { type: 'behemoth', n: 2 }], wings: 60 },
+      { prewave: 32, drops: [{ type: 'splitter', n: 10 }, { type: 'armored', n: 8 }], jammers: 1, wings: 70 },
       { prewave: 38, drops: [{ type: 'crawler', n: 36 }, { type: 'crawler', n: 32 }, { type: 'behemoth', n: 2, heavy: true }, { type: 'swarm', n: 18 }], wings: 220, divers: 3, tide: true },
     ],
   },
   {
     id: 11, chapter: 2, name: '尖啸孤堡', sub: 'SHRIEKING SIEGE',
-    flavor: '尖啸者死亡时的嘶鸣会让整个尸潮陷入狂暴。孤城，无路可退。', objective: '孤城割草 · 优先点名尖啸者',
+    flavor: '尖啸者死亡时的嘶鸣会让整个虫潮陷入狂暴。孤城，无路可退。', objective: '孤城割草 · 优先点名尖啸者',
     seed: 30277563, cities: 1, cityLayout: 'capital', cityCluster: 1.0,
     landingSpread: 1.2, lanes: 4, startEnergy: 400, towers: T8,
     waves: [
       { prewave: 28, drops: [{ type: 'crawler', n: 28 }, { type: 'shrieker', n: 2 }] },
-      { prewave: 30, drops: [{ type: 'crawler', n: 30 }, { type: 'shrieker', n: 3 }], wings: 120 },
-      { prewave: 32, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }, { type: 'behemoth', n: 1 }], wings: 140 },
-      { prewave: 32, drops: [{ type: 'splitter', n: 10 }, { type: 'shrieker', n: 4 }, { type: 'runner', n: 12 }], gunships: 1, wings: 140 },
+      { prewave: 30, drops: [{ type: 'crawler', n: 30 }, { type: 'shrieker', n: 3 }], wings: 60 },
+      { prewave: 32, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }, { type: 'behemoth', n: 1 }], wings: 70 },
+      { prewave: 32, drops: [{ type: 'splitter', n: 10 }, { type: 'shrieker', n: 4 }, { type: 'runner', n: 12 }], gunships: 1, wings: 70 },
       { prewave: 40, drops: [{ type: 'crawler', n: 36 }, { type: 'crawler', n: 34 }, { type: 'shrieker', n: 5 }, { type: 'behemoth', n: 2 }], wings: 240, divers: 3, tide: true },
     ],
   },
@@ -200,10 +254,10 @@ export const LEVELS: LevelCfg[] = [
     seed: 84147098, cities: 2, cityLayout: 'cluster', cityCluster: 0.85,
     landingSpread: 1.5, lanes: 3, startEnergy: 420, towers: T9,
     waves: [
-      { prewave: 28, drops: [{ type: 'swarm', n: 14 }], wings: 160, divers: 2 },
-      { prewave: 30, drops: [{ type: 'crawler', n: 28 }], jammers: 1, wings: 200, divers: 3 },
+      { prewave: 28, drops: [{ type: 'swarm', n: 14 }], wings: 80, divers: 2 },
+      { prewave: 30, drops: [{ type: 'crawler', n: 28 }], jammers: 1, wings: 100, divers: 3 },
       { prewave: 32, drops: [{ type: 'runner', n: 14 }], gunships: 2, hives: 1, divers: 2 },
-      { prewave: 32, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }], jammers: 2, wings: 200, divers: 4 },
+      { prewave: 32, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }], jammers: 2, wings: 100, divers: 4 },
       { prewave: 40, drops: [{ type: 'crawler', n: 34 }, { type: 'swarm', n: 18 }, { type: 'behemoth', n: 2 }], wings: 240, divers: 5, gunships: 2, hives: 2, tide: true },
     ],
   },
@@ -214,9 +268,9 @@ export const LEVELS: LevelCfg[] = [
     landingSpread: 1.6, lanes: 4, startEnergy: 440, towers: T9,
     waves: [
       { prewave: 28, drops: [{ type: 'armored', n: 9 }, { type: 'crawler', n: 26 }] },
-      { prewave: 32, drops: [{ type: 'armored', n: 11, heavy: true }, { type: 'behemoth', n: 2 }], wings: 120 },
+      { prewave: 32, drops: [{ type: 'armored', n: 11, heavy: true }, { type: 'behemoth', n: 2 }], wings: 60 },
       { prewave: 38, drops: [{ type: 'armored', n: 13, heavy: true }, { type: 'crawler', n: 32 }, { type: 'behemoth', n: 2 }, { type: 'shrieker', n: 3 }], wings: 180, divers: 3, tide: true },
-      { prewave: 32, drops: [{ type: 'armored', n: 11 }, { type: 'splitter', n: 10 }], jammers: 2, wings: 160 },
+      { prewave: 32, drops: [{ type: 'armored', n: 11 }, { type: 'splitter', n: 10 }], jammers: 2, wings: 80 },
       { prewave: 40, drops: [{ type: 'armored', n: 15, heavy: true }, { type: 'crawler', n: 36 }, { type: 'behemoth', n: 3, heavy: true }, { type: 'shrieker', n: 4 }], wings: 240, divers: 4, gunships: 2, tide: true },
     ],
   },
@@ -226,12 +280,12 @@ export const LEVELS: LevelCfg[] = [
     seed: 27182099, cities: 2, cityLayout: 'capital', cityCluster: 0.9,
     landingSpread: 1.8, lanes: 5, startEnergy: 460, towers: T9,
     waves: [
-      { prewave: 30, drops: [{ type: 'crawler', n: 30 }, { type: 'swarm', n: 14 }], wings: 120 },
-      { prewave: 32, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }, { type: 'behemoth', n: 2 }], jammers: 1, wings: 160 },
+      { prewave: 30, drops: [{ type: 'crawler', n: 30 }, { type: 'swarm', n: 14 }], wings: 60 },
+      { prewave: 32, drops: [{ type: 'crawler', n: 32 }, { type: 'shrieker', n: 3 }, { type: 'behemoth', n: 2 }], jammers: 1, wings: 80 },
       { prewave: 38, drops: [{ type: 'crawler', n: 34 }, { type: 'armored', n: 11 }, { type: 'shrieker', n: 4 }], wings: 220, divers: 3, hives: 1, tide: true },
-      { prewave: 32, drops: [{ type: 'splitter', n: 12 }, { type: 'runner', n: 14 }], jammers: 2, gunships: 2, wings: 180 },
+      { prewave: 32, drops: [{ type: 'splitter', n: 12 }, { type: 'runner', n: 14 }], jammers: 2, gunships: 2, wings: 90 },
       { prewave: 38, drops: [{ type: 'crawler', n: 36 }, { type: 'behemoth', n: 3, heavy: true }, { type: 'shrieker', n: 4 }, { type: 'armored', n: 13, heavy: true }], wings: 200, divers: 4, hives: 2, tide: true },
-      { prewave: 36, drops: [{ type: 'armored', n: 13 }, { type: 'crawler', n: 34 }], jammers: 2, wings: 200, divers: 3 },
+      { prewave: 36, drops: [{ type: 'armored', n: 13 }, { type: 'crawler', n: 34 }], jammers: 2, wings: 100, divers: 3 },
       { prewave: 42, drops: [{ type: 'crawler', n: 40 }, { type: 'crawler', n: 36 }, { type: 'behemoth', n: 4, heavy: true }, { type: 'shrieker', n: 5 }, { type: 'armored', n: 15, heavy: true }], wings: 260, divers: 5, gunships: 2, hives: 2, boss: true, tide: true },
     ],
   },
