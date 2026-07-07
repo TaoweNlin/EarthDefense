@@ -1494,7 +1494,7 @@ export class Game {
     o.dropTimer = startRadius;                 // 出发高度
     o.deployTimer = this.rand() * Math.PI * 2; // 螺旋相位
     o.wingAlt = cruiseAlt ?? (1.2 + this.rand() * 0.16); // 巡航高度（高空层厚海面）
-    o.swirlAmp = 0.018 + this.rand() * 0.025;  // 个体摆动：海面的涌动质感
+    o.swirlAmp = 0.007 + this.rand() * 0.012;  // 骨架轻微涌动：队形整体推进
     o.group.visible = false;                   // 蜂群走虫海渲染
     this.orbitals.push(o);
     // 注册进虫海：与同批上一只蜂群构成骨架连线，视觉虫填充其间

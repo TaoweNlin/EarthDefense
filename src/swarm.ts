@@ -22,7 +22,7 @@ export interface SwarmParent {
   maxHp: number;
 }
 
-const BUGS_PER_WING = 12;
+const BUGS_PER_WING = 36;
 const FADE_TIME = 0.5;
 
 const _p = new THREE.Vector3();
@@ -46,9 +46,9 @@ export class SwarmSea {
   private free: number[] = [];
   private used: number[] = [];
 
-  constructor(parent: THREE.Object3D, capacity = 12288) {
+  constructor(parent: THREE.Object3D, capacity = 32768) {
     this.cap = capacity;
-    this.pool = new InstancePool(parent, new THREE.TetrahedronGeometry(0.0085), '#f43f5e', capacity);
+    this.pool = new InstancePool(parent, new THREE.TetrahedronGeometry(0.0072), '#f43f5e', capacity);
     this.pA = new Array(capacity).fill(null);
     this.pB = new Array(capacity).fill(null);
     this.blend = new Float32Array(capacity);
@@ -74,8 +74,9 @@ export class SwarmSea {
       this.blend[i] = Math.random();
       this.rank[i] = k;
       this.phase[i] = Math.random() * Math.PI * 2;
-      this.freq[i] = 1.6 + Math.random() * 2.2;
-      this.amp[i] = 0.012 + Math.random() * 0.03;
+      // 轻微呼吸式漂移：整体保持队形朝目标推进，而不是各自乱窜
+      this.freq[i] = 0.7 + Math.random() * 0.9;
+      this.amp[i] = 0.005 + Math.random() * 0.011;
       this.fade[i] = -1;
       this.used.push(i);
     }
@@ -127,7 +128,8 @@ export class SwarmSea {
       _p.y += Math.sin(time * fr * 0.83 + ph * 2.1) * am;
       _p.z += Math.cos(time * fr * 1.19 + ph) * am;
       this.lastX[i] = _p.x; this.lastY[i] = _p.y; this.lastZ[i] = _p.z;
-      this.pool.push(_p, time * 3.2 + ph, time * 2.4 + ph * 1.7);
+      // 缓慢一致的翻滚：队形感来自克制的旋转
+      this.pool.push(_p, time * 0.9 + ph * 0.3, time * 0.7 + ph * 0.5);
     }
     this.pool.end();
   }
