@@ -815,17 +815,64 @@ window.addEventListener('pointermove', (e) => {
   orbitCamera(-dx * k, dy * k);
   velYaw = -dx * k; velPitch = dy * k;
 });
+// 视角模式：orbit = 环绕俯瞰；horizon = 贴地仰视（拉近到底后继续滚轮进入）
+let viewMode: 'orbit' | 'horizon' = 'orbit';
+const horizonDir = new THREE.Vector3(0, 0, 1); // 地表立足点方向
+let hYaw = 0;
+let hPitch = 0.5; // 仰角
+
 renderer.domElement.addEventListener('wheel', (e) => {
   e.preventDefault();
-  camDistTarget = THREE.MathUtils.clamp(camDistTarget * (1 + Math.sign(e.deltaY) * 0.12), 1.7, 4.6);
+  if (viewMode === 'horizon') {
+    // 地表视角里滚轮缩小 = 返回轨道视角
+    if (Math.sign(e.deltaY) > 0) {
+      viewMode = 'orbit';
+      camDistTarget = 2.2;
+      camera.up.set(0, 1, 0);
+    }
+    return;
+  }
+  const zoomIn = Math.sign(e.deltaY) < 0;
+  if (zoomIn && camDistTarget <= 1.72) {
+    // 已在最近距离仍继续放大 → 切入地表仰视
+    viewMode = 'horizon';
+    horizonDir.copy(camera.position).normalize();
+    hYaw = 0;
+    hPitch = 0.22; // 默认贴着地平线，能同时看到地表与天幕
+    return;
+  }
+  camDistTarget = THREE.MathUtils.clamp(camDistTarget * (1 + Math.sign(e.deltaY) * 0.12), 1.7, 7.5);
 }, { passive: false });
 
 function orbitCamera(dYaw: number, dPitch: number) {
+  if (viewMode === 'horizon') {
+    hYaw += dYaw * 1.6;
+    hPitch = THREE.MathUtils.clamp(hPitch - dPitch * 1.6, 0.05, 1.5);
+    return;
+  }
   camYaw += dYaw;
   camPitch = THREE.MathUtils.clamp(camPitch + dPitch, -PITCH_LIMIT, PITCH_LIMIT);
 }
 
+const _hE1 = new THREE.Vector3();
+const _hE2 = new THREE.Vector3();
+const _hLook = new THREE.Vector3();
+
 function updateCamera() {
+  if (viewMode === 'horizon') {
+    // 贴地仰视：站在地表，看地平线与压过头顶的虫群
+    const n = horizonDir;
+    const ref = Math.abs(n.y) < 0.95 ? camera.up.set(0, 1, 0) : camera.up.set(1, 0, 0);
+    _hE1.crossVectors(n, ref).normalize();
+    _hE2.crossVectors(n, _hE1).normalize();
+    camera.position.copy(n).multiplyScalar(1.045);
+    _hLook.copy(_hE1).multiplyScalar(Math.cos(hYaw) * Math.cos(hPitch))
+      .addScaledVector(_hE2, Math.sin(hYaw) * Math.cos(hPitch))
+      .addScaledVector(n, Math.sin(hPitch));
+    camera.up.copy(n);
+    camera.lookAt(_hLook.add(camera.position));
+    return;
+  }
   const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
   camera.position.set(
     Math.sin(camYaw) * cp * camDist,

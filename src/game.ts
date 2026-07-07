@@ -230,6 +230,8 @@ export class Game {
   // 连杀：短窗口内的连续击杀计数（割草反馈）
   private streak = 0;
   private streakT = 0;
+  // 蜂群死亡消散：簇群碎裂、逐只熄灭的余像
+  private wingFades: { pos: THREE.Vector3; ph: number; t: number }[] = [];
 
   cities: City[] = [];
   towers: Tower[] = [];
@@ -284,12 +286,23 @@ export class Game {
     this.wingPool.begin();
     for (const o of this.orbitals) {
       if (o.kind !== 'wing' || !o.alive || !o.group.visible || o.phase === 'done') continue;
-      // 每个逻辑蜂群渲染为一簇：立体分布 + 各自呼吸游动
+      // 每个逻辑蜂群渲染为一簇：立体分布 + 各自呼吸游动；受伤后按血量比例逐只减员
       const ph = o.deployTimer;
-      for (let j = 0; j < WING_CLUSTER; j++) {
+      const alive = Math.max(2, Math.round(WING_CLUSTER * (o.hp / o.maxHp)));
+      for (let j = 0; j < alive; j++) {
         const breathe = 0.03 + 0.013 * Math.sin(t * 2.4 + ph + j * 2.1);
         _wOff.copy(o.group.position).addScaledVector(CLUSTER_DIRS[j], breathe);
         this.wingPool.push(_wOff, t * 2.6 + ph + j * 1.3, t * 3.4 + o.orbitAngle * 11 + j * 0.7);
+      }
+    }
+    // 死亡簇碎裂余像：只数递减、向外飘散
+    for (const f of this.wingFades) {
+      const fk = Math.max(0, f.t / 0.55);
+      const n = Math.round(WING_CLUSTER * fk);
+      const scatter = 0.03 + (1 - fk) * 0.07;
+      for (let j = 0; j < n; j++) {
+        _wOff.copy(f.pos).addScaledVector(CLUSTER_DIRS[j], scatter);
+        this.wingPool.push(_wOff, t * 2.6 + f.ph + j * 1.3, t * 1.8 + j, fk);
       }
     }
     this.wingPool.end();
@@ -1113,6 +1126,9 @@ export class Game {
       this.streakT -= dt;
       if (this.streakT <= 0) this.streak = 0;
     }
+    // 蜂群消散余像推进
+    for (const f of this.wingFades) f.t -= dt;
+    this.wingFades = this.wingFades.filter((f) => f.t > 0);
 
     // 连续进攻调度：倒计时到点就发起下一波，不等上一波清完
     if (this.launched < this.totalWaves()) {
@@ -1463,40 +1479,47 @@ export class Game {
     this.orbitals.push(o);
   }
 
-  /** 飞行蜂群：从走廊外侧成编队低空飞向城市，防空的割草靶 */
+  /** 飞行蜂群：分成若干条虫河，从不同方向的走廊外侧涌向城市 */
   private spawnWings(count: number) {
     const targets = this.cities.filter((c) => c.alive);
     if (!targets.length || !this.laneCells.length) return;
-    const lane = this.grid.cells[this.laneCells[Math.floor(this.rand() * this.laneCells.length)]];
-    // 目标：距走廊最近的存活城市
-    let city = targets[0];
-    for (const c of targets) {
-      if (this.grid.cells[c.cellId].center.angleTo(lane.center)
-        < this.grid.cells[city.cellId].center.angleTo(lane.center)) city = c;
-    }
-    const cityDir = this.grid.cells[city.cellId].center.clone();
-    // 出发点：沿"城市→走廊"方向再向外延伸，编队从走廊外侧压进来
-    const startBase = cityDir.clone().lerp(lane.center, 1.7).normalize();
-    const ref = Math.abs(startBase.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-    const e1 = new THREE.Vector3().crossVectors(startBase, ref).normalize();
-    const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
-
-    // 整波共享一条紧密虫河：统一高度带 + 小幅个体散布，凝成整体而非碎屑
-    const COL_SIZE = 22;
-    const riverAlt = 1.1 + this.rand() * 0.1; // 本波虫河的主高度带
-    let colE1 = 0, colE2 = 0;
-    for (let i = 0; i < count; i++) {
-      const col = Math.floor(i / COL_SIZE);
-      if (i % COL_SIZE === 0) {
-        colE1 = (this.rand() - 0.5) * 0.15;
-        colE2 = (this.rand() - 0.5) * 0.15;
+    // 数量越大分越多条河（1~3 条），各有自己的出发方向与高度带
+    const rivers = count > 60 ? 3 : count > 25 ? 2 : 1;
+    const per = Math.ceil(count / rivers);
+    const laneStart = Math.floor(this.rand() * this.laneCells.length);
+    for (let r = 0; r < rivers; r++) {
+      const lane = this.grid.cells[this.laneCells[(laneStart + r) % this.laneCells.length]];
+      // 目标：距该走廊最近的存活城市
+      let city = targets[0];
+      for (const c of targets) {
+        if (this.grid.cells[c.cellId].center.angleTo(lane.center)
+          < this.grid.cells[city.cellId].center.angleTo(lane.center)) city = c;
       }
-      const spread = colE1 + (this.rand() - 0.5) * 0.07;
-      const spread2 = colE2 + (this.rand() - 0.5) * 0.07;
-      const dir = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
-      this.spawnWingUnit(dir, city.cellId, WING_ALT,
-        (i % COL_SIZE) * 0.03 + col * 0.06,
-        riverAlt + (this.rand() - 0.5) * 0.06);
+      const cityDir = this.grid.cells[city.cellId].center.clone();
+      // 出发点：沿"城市→走廊"方向再向外延伸，编队从走廊外侧压进来
+      const startBase = cityDir.clone().lerp(lane.center, 1.7).normalize();
+      const ref = Math.abs(startBase.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+      const e1 = new THREE.Vector3().crossVectors(startBase, ref).normalize();
+      const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
+
+      // 每条虫河：统一高度带 + 小幅个体散布，凝成整体而非碎屑
+      const COL_SIZE = 22;
+      const riverAlt = 1.1 + this.rand() * 0.1;
+      const n = Math.min(per, count - r * per);
+      let colE1 = 0, colE2 = 0;
+      for (let i = 0; i < n; i++) {
+        const col = Math.floor(i / COL_SIZE);
+        if (i % COL_SIZE === 0) {
+          colE1 = (this.rand() - 0.5) * 0.15;
+          colE2 = (this.rand() - 0.5) * 0.15;
+        }
+        const spread = colE1 + (this.rand() - 0.5) * 0.07;
+        const spread2 = colE2 + (this.rand() - 0.5) * 0.07;
+        const dir = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
+        this.spawnWingUnit(dir, city.cellId, WING_ALT,
+          (i % COL_SIZE) * 0.03 + col * 0.06 + r * 0.08,
+          riverAlt + (this.rand() - 0.5) * 0.06);
+      }
     }
   }
 
@@ -1841,7 +1864,9 @@ export class Game {
       this.registerKill();
       this.energy += WING_REWARD;
       sfx.play('explosion', 130);
-      this.spawnRing(o.pos.clone(), COL_CYAN, 0.03);
+      // 簇群碎裂余像：逐只熄灭而不是整团瞬间消失
+      this.wingFades.push({ pos: o.pos.clone(), ph: o.deployTimer, t: 0.55 });
+      if (this.wingFades.length > 160) this.wingFades.shift();
     } else {
       o.alive = false;
       this.stats.intercepted++;
