@@ -6,6 +6,7 @@ import type { GoldbergGrid, Cell } from './goldberg';
 import type { LevelCfg, WaveCfg } from './levels';
 import { sfx } from './sound';
 import { InstancePool } from './instances';
+import { SwarmSea, type SwarmParent } from './swarm';
 
 const COL_CYAN = new THREE.Color('#22d3ee');
 const COL_ROSE = new THREE.Color('#f43f5e');
@@ -174,19 +175,6 @@ const _wSide = new THREE.Vector3();
 const HIVE_SQUAD_INTERVAL = 4.2; // 每批虫群间隔
 const HIVE_SQUAD_SIZE = 32;      // 每批数量
 const WING_CAP = 900;            // 全场逻辑蜂群上限（性能保险丝）
-// 视觉簇群：每个逻辑蜂群渲染为一簇 30 只，数量观感 ×30 而逻辑成本不变
-const WING_CLUSTER = 30;
-const CLUSTER_DIRS: THREE.Vector3[] = [];
-{
-  // 黄金螺旋均匀分布的簇内偏移方向（真三维，不是平面圆盘）
-  for (let j = 0; j < WING_CLUSTER; j++) {
-    const y = 1 - (j / (WING_CLUSTER - 1)) * 2;
-    const r = Math.sqrt(1 - y * y);
-    const a = j * 2.39996;
-    CLUSTER_DIRS.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
-  }
-}
-const _wOff = new THREE.Vector3();
 interface Orbital {
   kind: OrbitalKind; hp: number; maxHp: number; alive: boolean;
   group: THREE.Group; pos: THREE.Vector3;
@@ -226,12 +214,11 @@ export class Game {
   private laneMarkers: THREE.Group[] = [];
   satellites: Satellite[] = [];
   private unitPools!: Record<string, InstancePool>;
-  private wingPool!: InstancePool;
+  private swarm!: SwarmSea;
+  private prevWing: SwarmParent | null = null; // 虫海骨架链：同批次的上一只蜂群
   // 连杀：短窗口内的连续击杀计数（割草反馈）
   private streak = 0;
   private streakT = 0;
-  // 蜂群死亡消散：簇群碎裂、逐只熄灭的余像
-  private wingFades: { pos: THREE.Vector3; ph: number; t: number }[] = [];
 
   cities: City[] = [];
   towers: Tower[] = [];
@@ -267,14 +254,14 @@ export class Game {
       behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
       shrieker: new InstancePool(this.root, new THREE.ConeGeometry(D.shrieker.size * 0.8, D.shrieker.size * 2.4, 5), '#ff4d7d', 128),
     };
-    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.0085), COL_ROSE, 1024 * WING_CLUSTER);
+    this.swarm = new SwarmSea(this.root);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
   }
 
   /** 每帧一次（由主循环在全部逻辑子步后调用），把存活单位写入实例缓冲 */
-  renderInstances() {
+  renderInstances(dt: number) {
     const t = this.time;
     for (const k in this.unitPools) this.unitPools[k].begin();
     for (const u of this.units) {
@@ -283,29 +270,8 @@ export class Game {
     }
     for (const k in this.unitPools) this.unitPools[k].end();
 
-    this.wingPool.begin();
-    for (const o of this.orbitals) {
-      if (o.kind !== 'wing' || !o.alive || !o.group.visible || o.phase === 'done') continue;
-      // 每个逻辑蜂群渲染为一簇：立体分布 + 各自呼吸游动；受伤后按血量比例逐只减员
-      const ph = o.deployTimer;
-      const alive = Math.max(2, Math.round(WING_CLUSTER * (o.hp / o.maxHp)));
-      for (let j = 0; j < alive; j++) {
-        const breathe = 0.03 + 0.013 * Math.sin(t * 2.4 + ph + j * 2.1);
-        _wOff.copy(o.group.position).addScaledVector(CLUSTER_DIRS[j], breathe);
-        this.wingPool.push(_wOff, t * 2.6 + ph + j * 1.3, t * 3.4 + o.orbitAngle * 11 + j * 0.7);
-      }
-    }
-    // 死亡簇碎裂余像：只数递减、向外飘散
-    for (const f of this.wingFades) {
-      const fk = Math.max(0, f.t / 0.55);
-      const n = Math.round(WING_CLUSTER * fk);
-      const scatter = 0.03 + (1 - fk) * 0.07;
-      for (let j = 0; j < n; j++) {
-        _wOff.copy(f.pos).addScaledVector(CLUSTER_DIRS[j], scatter);
-        this.wingPool.push(_wOff, t * 2.6 + f.ph + j * 1.3, t * 1.8 + j, fk);
-      }
-    }
-    this.wingPool.end();
+    // 虫海：视觉层解耦渲染（骨架插值连续体）
+    this.swarm.render(dt, t);
   }
 
   /** 由主菜单/自动开始调用，正式进入布防倒计时 */
@@ -1126,9 +1092,6 @@ export class Game {
       this.streakT -= dt;
       if (this.streakT <= 0) this.streak = 0;
     }
-    // 蜂群消散余像推进
-    for (const f of this.wingFades) f.t -= dt;
-    this.wingFades = this.wingFades.filter((f) => f.t > 0);
 
     // 连续进攻调度：倒计时到点就发起下一波，不等上一波清完
     if (this.launched < this.totalWaves()) {
@@ -1502,6 +1465,7 @@ export class Game {
 
       const n = Math.min(per, count - r * per);
       const rollDepth = n * 0.015; // 海浪厚度：随数量拉长，持续席卷
+      this.prevWing = null; // 骨架链按锋面隔断
       for (let i = 0; i < n; i++) {
         // 出生面：双随机近似高斯的宽幕（±0.55），中密边疏
         const spread = (this.rand() + this.rand() - 1) * 0.55;
@@ -1531,8 +1495,11 @@ export class Game {
     o.deployTimer = this.rand() * Math.PI * 2; // 螺旋相位
     o.wingAlt = cruiseAlt ?? (1.2 + this.rand() * 0.16); // 巡航高度（高空层厚海面）
     o.swirlAmp = 0.018 + this.rand() * 0.025;  // 个体摆动：海面的涌动质感
-    o.group.visible = false;                   // 蜂群走实例化渲染池
+    o.group.visible = false;                   // 蜂群走虫海渲染
     this.orbitals.push(o);
+    // 注册进虫海：与同批上一只蜂群构成骨架连线，视觉虫填充其间
+    this.swarm.addWing(o as SwarmParent, this.prevWing);
+    this.prevWing = o as SwarmParent;
   }
 
   /** 虫巢母舰：远轨巨舰，周期性向星球倾泻立体虫群流，倾泻完毕后撤离 */
@@ -1702,6 +1669,7 @@ export class Game {
               const ref2 = Math.abs(cityDir2.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
               const te1 = new THREE.Vector3().crossVectors(cityDir2, ref2).normalize();
               const te2 = new THREE.Vector3().crossVectors(cityDir2, te1).normalize();
+              this.prevWing = null; // 骨架链按批次隔断
               for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
                 // 出生即散开成一片：宽幕喷涌 + 目标散布城市周边
                 const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
@@ -1859,15 +1827,12 @@ export class Game {
       sfx.play('intercept', 120);
       this.finishTransport(o, true);
     } else if (o.kind === 'wing') {
-      // 蜂群算击杀（割草），不算拦截
+      // 蜂群算击杀（割草），不算拦截；虫海会让它的虫原地碎裂消散
       o.alive = false;
       this.stats.kills++;
       this.registerKill();
       this.energy += WING_REWARD;
       sfx.play('explosion', 130);
-      // 簇群碎裂余像：逐只熄灭而不是整团瞬间消失
-      this.wingFades.push({ pos: o.pos.clone(), ph: o.deployTimer, t: 0.55 });
-      if (this.wingFades.length > 160) this.wingFades.shift();
     } else {
       o.alive = false;
       this.stats.intercepted++;

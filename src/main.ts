@@ -948,7 +948,7 @@ function tick() {
   } else {
     game.update(0);
   }
-  game.renderInstances(); // 实例缓冲每帧只写一次（与子步数无关）
+  game.renderInstances(dt); // 实例缓冲每帧只写一次（与子步数无关）
   mm.update();
   updateTutorial(dt);
 
