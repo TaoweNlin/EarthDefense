@@ -173,7 +173,20 @@ const _wSide = new THREE.Vector3();
 
 const HIVE_SQUAD_INTERVAL = 4.2; // 每批虫群间隔
 const HIVE_SQUAD_SIZE = 32;      // 每批数量
-const WING_CAP = 900;            // 全场蜂群上限（性能保险丝）
+const WING_CAP = 900;            // 全场逻辑蜂群上限（性能保险丝）
+// 视觉簇群：每个逻辑蜂群渲染为一簇 10 只，数量观感 ×10 而逻辑成本不变
+const WING_CLUSTER = 10;
+const CLUSTER_DIRS: THREE.Vector3[] = [];
+{
+  // 黄金螺旋均匀分布的簇内偏移方向（真三维，不是平面圆盘）
+  for (let j = 0; j < WING_CLUSTER; j++) {
+    const y = 1 - (j / (WING_CLUSTER - 1)) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const a = j * 2.39996;
+    CLUSTER_DIRS.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
+  }
+}
+const _wOff = new THREE.Vector3();
 interface Orbital {
   kind: OrbitalKind; hp: number; maxHp: number; alive: boolean;
   group: THREE.Group; pos: THREE.Vector3;
@@ -184,7 +197,9 @@ interface Orbital {
   marker: THREE.Group | null; trail: THREE.Line | null;
   // jammer/boss 专用
   orbitAxis: THREE.Vector3; orbitAngle: number; dropTimer: number;
-  heavy?: boolean; // 重型登陆舱：厚甲、慢速、远距登陆
+  heavy?: boolean;    // 重型登陆舱：厚甲、慢速、远距登陆
+  wingAlt?: number;   // 蜂群个体巡航高度（1.06~1.34，形成立体云）
+  swirlAmp?: number;  // 蜂群个体螺旋摆动幅度
 }
 
 interface Fx { obj: THREE.Object3D; ttl: number; max: number; kind: 'laser' | 'ring' | 'flash' | 'beam' | 'arc' }
@@ -250,7 +265,7 @@ export class Game {
       behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
       shrieker: new InstancePool(this.root, new THREE.ConeGeometry(D.shrieker.size * 0.8, D.shrieker.size * 2.4, 5), '#ff4d7d', 128),
     };
-    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.013), COL_ROSE, 1024);
+    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.011), COL_ROSE, 1024 * WING_CLUSTER);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
@@ -269,7 +284,13 @@ export class Game {
     this.wingPool.begin();
     for (const o of this.orbitals) {
       if (o.kind !== 'wing' || !o.alive || !o.group.visible || o.phase === 'done') continue;
-      this.wingPool.push(o.group.position, t * 2.6 + o.orbitAngle * 37, t * 3.4 + o.orbitAngle * 11);
+      // 每个逻辑蜂群渲染为一簇：立体分布 + 各自呼吸游动
+      const ph = o.deployTimer;
+      for (let j = 0; j < WING_CLUSTER; j++) {
+        const breathe = 0.021 + 0.009 * Math.sin(t * 2.4 + ph + j * 2.1);
+        _wOff.copy(o.group.position).addScaledVector(CLUSTER_DIRS[j], breathe);
+        this.wingPool.push(_wOff, t * 2.6 + ph + j * 1.3, t * 3.4 + o.orbitAngle * 11 + j * 0.7);
+      }
     }
     this.wingPool.end();
   }
@@ -1487,6 +1508,8 @@ export class Game {
     o.theta = -delayProgress;                  // 进度（负值 = 延迟出场）
     o.dropTimer = startRadius;                 // 出发高度
     o.deployTimer = this.rand() * Math.PI * 2; // 螺旋相位
+    o.wingAlt = 1.06 + this.rand() * 0.28;     // 个体巡航高度：铺开成立体云层
+    o.swirlAmp = 0.02 + this.rand() * 0.035;   // 个体螺旋摆动
     o.group.visible = false;                   // 蜂群走实例化渲染池
     this.orbitals.push(o);
   }
@@ -1614,22 +1637,22 @@ export class Game {
         o.group.visible = true;
         const k = Math.min(1, o.theta);
         const startR = o.dropTimer || WING_ALT;
-        // 高度：从出发高度平滑俯冲到巡航高度（虫巢流从远轨压下来）
+        const cruise = o.wingAlt ?? WING_ALT;
+        // 高度：从出发高度平滑俯冲到【个体专属】巡航高度——整群铺开成立体云层
         const dive = Math.min(1, k * 1.6);
-        const baseAlt = startR + (WING_ALT - startR) * (1 - (1 - dive) * (1 - dive));
-        const alt = baseAlt + 0.008 * Math.sin(this.time * 3 + o.landCell + o.orbitAngle * 37);
+        const baseAlt = startR + (cruise - startR) * (1 - (1 - dive) * (1 - dive));
+        const alt = baseAlt + 0.012 * Math.sin(this.time * 3 + o.landCell + o.orbitAngle * 37);
         _wDir.copy(o.basisN).lerp(o.basisU, k).normalize();
         o.group.position.copy(_wDir).multiplyScalar(alt);
-        // 虫巢流的立体螺旋队形：绕飞行走廊盘旋，越接近目标越收束
-        if (startR > WING_ALT + 0.05) {
-          _wAxis.crossVectors(o.basisN, o.basisU).normalize();
-          _wSide.crossVectors(_wDir, _wAxis).normalize();
-          const ph = o.deployTimer + k * 9;
-          const amp = 0.07 * (1 - k);
-          o.group.position
-            .addScaledVector(_wAxis, Math.cos(ph) * amp)
-            .addScaledVector(_wSide, Math.sin(ph) * amp);
-        }
+        // 全程立体螺旋：每只绕自己的飞行走廊盘旋（虫巢流额外带收束漏斗）
+        _wAxis.crossVectors(o.basisN, o.basisU).normalize();
+        _wSide.crossVectors(_wDir, _wAxis).normalize();
+        const ph = o.deployTimer + k * 9;
+        const funnel = startR > WING_ALT + 0.05 ? 0.07 * (1 - k) : 0;
+        const amp = (o.swirlAmp ?? 0.02) + funnel;
+        o.group.position
+          .addScaledVector(_wAxis, Math.cos(ph) * amp)
+          .addScaledVector(_wSide, Math.sin(ph) * amp);
         if (k >= 1) {
           // 抵达城市上空：自杀式冲撞
           o.phase = 'done';
