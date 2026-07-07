@@ -47,10 +47,10 @@ const VERT = /* glsl */ `
     // 骨架插值（B 不可用时收拢回 A）
     vec3 anchorB = B.w > 0.0 ? B.xyz : A.xyz;
     vec3 base = mix(A.xyz, anchorB, aP0.z);
-    // 静态体积偏移：把虫从骨架线膨胀成有厚度的云
+    // 静态体积偏移：把骨架线段膨胀成雪茄状云柱（核心密、外围疏），云柱交叠成海
     vec3 offDir = normalize(vec3(sin(seed * 7.13), sin(seed * 3.71 + 1.7), cos(seed * 5.39)));
-    float offMag = fract(seed * 0.731) ;
-    base += offDir * (offMag * offMag * 0.055);
+    float offMag = fract(seed * 0.731);
+    base += offDir * (offMag * offMag * 0.13);
     // 有机摆动
     base += vec3(
       sin(uTime * fr + ph),
@@ -70,8 +70,13 @@ const VERT = /* glsl */ `
       } else {
         scale = 0.0;
       }
-    } else if (aP0.w > state) {
-      scale = 0.0; // 血量减员：高序号的虫先脱离
+    } else {
+      // 血量侵蚀带：接近减员阈值的虫平滑缩小、外飘、淡出——
+      // 激光/炮火扫过虫云时边缘连续剥落，而不是成片瞬灭
+      float erode = clamp((state - aP0.w) / 0.08, 0.0, 1.0);
+      scale *= erode;
+      vAlpha *= erode;
+      base += offDir * (1.0 - erode) * 0.035;
     }
 
     // 缓慢一致的翻滚
@@ -115,13 +120,14 @@ export class SwarmSea {
     this.tex.minFilter = THREE.NearestFilter;
     this.tex.needsUpdate = true;
 
-    // 单三角形线框（每只 3 条边，50 万只 ≈ 314 万顶点，GPU 可承受）
-    const tri = new THREE.BufferGeometry();
-    tri.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-      0.009, 0, 0, -0.006, 0.007, 0, -0.006, -0.007, 0,
+    // 蝶形体：两个互相垂直的三角形，任意角度都有立体感（每只 6 条边）
+    const body = new THREE.BufferGeometry();
+    body.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+      0.01, 0, 0, -0.007, 0.008, 0, -0.007, -0.008, 0,   // 纵翼
+      0.01, 0, 0, -0.007, 0, 0.008, -0.007, 0, -0.008,   // 横翼
     ]), 3));
     this.geo = new THREE.InstancedBufferGeometry();
-    this.geo.setAttribute('position', tri.getAttribute('position'));
+    this.geo.setAttribute('position', body.getAttribute('position'));
     const total = SLOTS * BUGS_PER_SLOT;
     this.aP0 = new THREE.InstancedBufferAttribute(new Float32Array(total * 4), 4);
     this.aP1 = new THREE.InstancedBufferAttribute(new Float32Array(total * 4), 4);
