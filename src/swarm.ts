@@ -41,7 +41,7 @@ const VERT = /* glsl */ `
   void main() {
     vec4 A = skel(aP0.x, 0.25);
     vec4 B = skel(aP0.y, 0.25);
-    vec4 meta = skel(aP0.x, 0.75); // x = 死亡时刻
+    vec4 meta = skel(aP0.x, 0.75); // x = 死亡时刻, y = 进场时刻
     float ph = aP1.x, fr = aP1.y, am = aP1.z, seed = aP1.w;
 
     // 骨架插值（B 不可用时收拢回 A）
@@ -77,6 +77,14 @@ const VERT = /* glsl */ `
       scale *= erode;
       vAlpha *= erode;
       base += offDir * (1.0 - erode) * 0.035;
+      // 出生显形：穿梭进场——从零放大、由内向外涌出，杜绝凭空出现
+      if (meta.y > 0.0) {
+        float grow = clamp((uTime - meta.y) / 1.2, 0.0, 1.0);
+        grow = grow * grow * (3.0 - 2.0 * grow);
+        scale *= grow;
+        vAlpha *= grow;
+        base -= offDir * (1.0 - grow) * 0.06;
+      }
     }
 
     // 缓慢一致的翻滚
@@ -186,7 +194,8 @@ export class SwarmSea {
     // 初始隐藏（未进场）
     const t = slot * 4;
     this.texData[t + 3] = -1;
-    this.texData[SLOTS * 4 + t] = 0;
+    this.texData[SLOTS * 4 + t] = 0;     // 死亡时刻
+    this.texData[SLOTS * 4 + t + 1] = 0; // 进场时刻
     this.attrsDirty = true;
   }
 
@@ -202,6 +211,7 @@ export class SwarmSea {
           // 碎裂动画播完才回收槽位，避免复用打断淡出
           slot.deathAt = 0;
           this.texData[mt] = 0;
+          this.texData[mt + 1] = 0; // 清除进场时刻
           this.freeSlots.push(s);
         }
         if (slot.deathAt > 0) maxSlot = s; // 淡出中仍需渲染
@@ -223,6 +233,8 @@ export class SwarmSea {
       this.texData[t + 1] = p.y;
       this.texData[t + 2] = p.z;
       this.texData[t + 3] = w.group.visible ? Math.max(0.02, w.hp / w.maxHp) : -1;
+      // 记录进场时刻（首次可见），驱动着色器的穿梭显形
+      if (w.group.visible && this.texData[mt + 1] === 0) this.texData[mt + 1] = time;
       maxSlot = s;
     }
     this.tex.needsUpdate = true;

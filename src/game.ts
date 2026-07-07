@@ -212,6 +212,8 @@ export class Game {
   private cityCenter = new THREE.Vector3(0, 1, 0);
   private laneCells: number[] = [];
   private laneMarkers: THREE.Group[] = [];
+  /** 虫洞裂隙：虫潮的出生视觉锚点 */
+  private rifts: { group: THREE.Group; ttl: number; maxTtl: number }[] = [];
   satellites: Satellite[] = [];
   private unitPools!: Record<string, InstancePool>;
   private swarm!: SwarmSea;
@@ -1109,6 +1111,7 @@ export class Game {
     this.updateTowers(dt);
     this.updateSatellites(dt);
     this.updateProjectiles(dt);
+    this.updateRifts(dt);
     this.updateFx(dt);
     this.animateIdle(dt);
     this.updateHud();
@@ -1471,6 +1474,8 @@ export class Game {
       const n = Math.min(per, count - r * per);
       const rollDepth = n * 0.028; // 海浪厚度：拉长倾泻时间，保证波次持续性不空场
       this.prevWing = null; // 骨架链按锋面隔断
+      // 虫洞裂隙：锋面中心撕开次元裂口，虫群从这一带穿梭显形
+      this.spawnRift(startBase, Math.min(34, 6 + rollDepth * 22));
       for (let i = 0; i < n; i++) {
         // 出生面：双随机近似高斯的超宽幕（±0.85），中密边疏，覆盖大半个半球
         const spread = (this.rand() + this.rand() - 1) * 0.85;
@@ -1485,6 +1490,51 @@ export class Game {
           1.2 + this.rand() * 0.2, tgt);
       }
     }
+  }
+
+  /** 虫洞裂隙：双层逆旋环 + 涡心辉光，在虫潮出生带撕开又闭合 */
+  private spawnRift(dir: THREE.Vector3, lifetime: number) {
+    const g = new THREE.Group();
+    const mkRing = (r: number, tube: number, opacity: number) => {
+      const ring = new THREE.Mesh(
+        new THREE.TorusGeometry(r, tube, 8, 40),
+        new THREE.MeshBasicMaterial({ color: COL_ROSE, transparent: true, opacity, depthWrite: false }));
+      g.add(ring);
+      return ring;
+    };
+    const r1 = mkRing(0.16, 0.006, 0.75);
+    const r2 = mkRing(0.11, 0.004, 0.55);
+    r2.rotation.x = 0.5;
+    const core = new THREE.Mesh(
+      new THREE.CircleGeometry(0.09, 24),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color('#8a1030'), transparent: true, opacity: 0.5,
+        side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false,
+      }));
+    g.add(core);
+    g.position.copy(dir.clone().multiplyScalar(1.34));
+    g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+    g.scale.setScalar(0.01);
+    g.renderOrder = 8;
+    this.root.add(g);
+    this.rifts.push({ group: g, ttl: lifetime, maxTtl: lifetime });
+    sfx.play('jam', 300);
+  }
+
+  private updateRifts(dt: number) {
+    for (const rf of this.rifts) {
+      rf.ttl -= dt;
+      const age = rf.maxTtl - rf.ttl;
+      // 撕开（1s）→ 常驻旋转 → 闭合（最后 1.5s）
+      const open = Math.min(1, age / 1);
+      const close = Math.min(1, Math.max(0, rf.ttl) / 1.5);
+      rf.group.scale.setScalar(Math.max(0.01, open * close));
+      rf.group.rotation.z += dt * 1.8;
+      const r2 = rf.group.children[1];
+      if (r2) r2.rotation.z -= dt * 2.6;
+      if (rf.ttl <= 0) this.root.remove(rf.group);
+    }
+    this.rifts = this.rifts.filter((rf) => rf.ttl > 0);
   }
 
   /** 生成单只蜂群：startRadius > 巡航高度时为"虫巢流"（俯冲进场 + 螺旋队形） */
