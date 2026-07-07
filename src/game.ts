@@ -174,8 +174,8 @@ const _wSide = new THREE.Vector3();
 const HIVE_SQUAD_INTERVAL = 4.2; // 每批虫群间隔
 const HIVE_SQUAD_SIZE = 32;      // 每批数量
 const WING_CAP = 900;            // 全场逻辑蜂群上限（性能保险丝）
-// 视觉簇群：每个逻辑蜂群渲染为一簇 10 只，数量观感 ×10 而逻辑成本不变
-const WING_CLUSTER = 10;
+// 视觉簇群：每个逻辑蜂群渲染为一簇 30 只，数量观感 ×30 而逻辑成本不变
+const WING_CLUSTER = 30;
 const CLUSTER_DIRS: THREE.Vector3[] = [];
 {
   // 黄金螺旋均匀分布的簇内偏移方向（真三维，不是平面圆盘）
@@ -265,7 +265,7 @@ export class Game {
       behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
       shrieker: new InstancePool(this.root, new THREE.ConeGeometry(D.shrieker.size * 0.8, D.shrieker.size * 2.4, 5), '#ff4d7d', 128),
     };
-    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.011), COL_ROSE, 1024 * WING_CLUSTER);
+    this.wingPool = new InstancePool(this.root, new THREE.TetrahedronGeometry(0.0085), COL_ROSE, 1024 * WING_CLUSTER);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
@@ -287,7 +287,7 @@ export class Game {
       // 每个逻辑蜂群渲染为一簇：立体分布 + 各自呼吸游动
       const ph = o.deployTimer;
       for (let j = 0; j < WING_CLUSTER; j++) {
-        const breathe = 0.021 + 0.009 * Math.sin(t * 2.4 + ph + j * 2.1);
+        const breathe = 0.03 + 0.013 * Math.sin(t * 2.4 + ph + j * 2.1);
         _wOff.copy(o.group.position).addScaledVector(CLUSTER_DIRS[j], breathe);
         this.wingPool.push(_wOff, t * 2.6 + ph + j * 1.3, t * 3.4 + o.orbitAngle * 11 + j * 0.7);
       }
@@ -1481,24 +1481,27 @@ export class Game {
     const e1 = new THREE.Vector3().crossVectors(startBase, ref).normalize();
     const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
 
-    // 海量蜂群按多纵队推进：每 22 只一列，各列独立抖动、错峰进场
+    // 整波共享一条紧密虫河：统一高度带 + 小幅个体散布，凝成整体而非碎屑
     const COL_SIZE = 22;
+    const riverAlt = 1.1 + this.rand() * 0.1; // 本波虫河的主高度带
     let colE1 = 0, colE2 = 0;
     for (let i = 0; i < count; i++) {
       const col = Math.floor(i / COL_SIZE);
       if (i % COL_SIZE === 0) {
-        colE1 = (this.rand() - 0.5) * 0.5;
-        colE2 = (this.rand() - 0.5) * 0.5;
+        colE1 = (this.rand() - 0.5) * 0.15;
+        colE2 = (this.rand() - 0.5) * 0.15;
       }
-      const spread = colE1 + (this.rand() - 0.5) * 0.18;
-      const spread2 = colE2 + (this.rand() - 0.5) * 0.18;
+      const spread = colE1 + (this.rand() - 0.5) * 0.07;
+      const spread2 = colE2 + (this.rand() - 0.5) * 0.07;
       const dir = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
-      this.spawnWingUnit(dir, city.cellId, WING_ALT, (i % COL_SIZE) * 0.045 + col * 0.12);
+      this.spawnWingUnit(dir, city.cellId, WING_ALT,
+        (i % COL_SIZE) * 0.03 + col * 0.06,
+        riverAlt + (this.rand() - 0.5) * 0.06);
     }
   }
 
   /** 生成单只蜂群：startRadius > 巡航高度时为"虫巢流"（俯冲进场 + 螺旋队形） */
-  private spawnWingUnit(startDir: THREE.Vector3, cityCell: number, startRadius: number, delayProgress: number) {
+  private spawnWingUnit(startDir: THREE.Vector3, cityCell: number, startRadius: number, delayProgress: number, cruiseAlt?: number) {
     if (this.orbitals.filter((o) => o.kind === 'wing' && o.alive).length > WING_CAP) return;
     const o = this.baseOrbital('wing', WING_HP);
     o.landCell = cityCell;
@@ -1508,8 +1511,8 @@ export class Game {
     o.theta = -delayProgress;                  // 进度（负值 = 延迟出场）
     o.dropTimer = startRadius;                 // 出发高度
     o.deployTimer = this.rand() * Math.PI * 2; // 螺旋相位
-    o.wingAlt = 1.06 + this.rand() * 0.28;     // 个体巡航高度：铺开成立体云层
-    o.swirlAmp = 0.02 + this.rand() * 0.035;   // 个体螺旋摆动
+    o.wingAlt = cruiseAlt ?? (1.1 + this.rand() * 0.12); // 巡航高度（同波共享高度带）
+    o.swirlAmp = 0.012 + this.rand() * 0.015;  // 个体小幅摆动：活但不散
     o.group.visible = false;                   // 蜂群走实例化渲染池
     this.orbitals.push(o);
   }
@@ -1677,13 +1680,15 @@ export class Game {
             const targets = this.cities.filter((c) => c.alive);
             if (targets.length) {
               const city = targets[Math.floor(this.rand() * targets.length)];
+              const squadAlt = 1.1 + this.rand() * 0.1; // 本批虫流的主高度带
               for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
                 const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
-                  .multiplyScalar(0.16);
+                  .multiplyScalar(0.09);
                 // 8 只一组的子纵队，涌出而非排队
                 this.spawnWingUnit(
                   o.orbitAxis.clone().add(jitter).normalize(), city.cellId,
-                  HIVE_RADIUS, (w % 8) * 0.04 + Math.floor(w / 8) * 0.11);
+                  HIVE_RADIUS, (w % 8) * 0.03 + Math.floor(w / 8) * 0.08,
+                  squadAlt + (this.rand() - 0.5) * 0.05);
               }
               this.spawnRing(o.group.position.clone(), COL_ROSE, 0.12);
               sfx.play('jam', 400);
