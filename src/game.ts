@@ -69,14 +69,14 @@ const HORDE_MUL = 1.5;
 const WING_HP = 9;             // 飞行蜂群：极脆、海量，给全防线当割草靶
 const WING_REWARD = 1;
 const WING_SPEED = 0.055;      // 角速度 rad/s，缓慢推进
-const WING_ALT = 1.18;         // 巡航高度：拉高一点，空层视觉更分明
+const WING_ALT = 1.27;         // 巡航高度：高空层，强化体积感
 const WING_IMPACT_DAMAGE = 1;
 const DIVER_HP = 60;
 const DIVER_REWARD = 22;
 const DIVER_IMPACT_DAMAGE = 20;   // 撞击城市伤害
 const GUNSHIP_HP = 170;
 const GUNSHIP_REWARD = 48;
-const GUNSHIP_HOVER = 1.16;       // 悬停高度
+const GUNSHIP_HOVER = 1.24;       // 悬停高度
 const GUNSHIP_BOLT_DAMAGE = 4;
 const GUNSHIP_BOLT_INTERVAL = 2.4;
 
@@ -1461,7 +1461,7 @@ export class Game {
     const pts: THREE.Vector3[] = [];
     for (let i = 0; i <= 64; i++) {
       const th = -2.4 + (i / 64) * 2.4;
-      const r = 1.5 - Math.max(0, (th + 1.0) / 1.0) * 0.3;
+      const r = 1.65 - Math.max(0, (th + 1.0) / 1.0) * 0.35;
       pts.push(n.clone().multiplyScalar(Math.cos(th)).addScaledVector(u, Math.sin(th)).multiplyScalar(r));
     }
     pts.push(n.clone().multiplyScalar(1.02));
@@ -1479,63 +1479,58 @@ export class Game {
     this.orbitals.push(o);
   }
 
-  /** 飞行蜂群：分成若干条虫河，从不同方向的走廊外侧涌向城市 */
+  /** 飞行蜂群：宽阔虫海——出生铺成一大片前锋幕，目标散布在城市周边，整片席卷而来 */
   private spawnWings(count: number) {
     const targets = this.cities.filter((c) => c.alive);
     if (!targets.length || !this.laneCells.length) return;
-    // 数量越大分越多条河（1~3 条），各有自己的出发方向与高度带
-    const rivers = count > 60 ? 3 : count > 25 ? 2 : 1;
-    const per = Math.ceil(count / rivers);
+    // 多个方向的海面（1~3 片），各自席卷向最近的城市
+    const fronts = count > 60 ? 3 : count > 25 ? 2 : 1;
+    const per = Math.ceil(count / fronts);
     const laneStart = Math.floor(this.rand() * this.laneCells.length);
-    for (let r = 0; r < rivers; r++) {
+    for (let r = 0; r < fronts; r++) {
       const lane = this.grid.cells[this.laneCells[(laneStart + r) % this.laneCells.length]];
-      // 目标：距该走廊最近的存活城市
       let city = targets[0];
       for (const c of targets) {
         if (this.grid.cells[c.cellId].center.angleTo(lane.center)
           < this.grid.cells[city.cellId].center.angleTo(lane.center)) city = c;
       }
       const cityDir = this.grid.cells[city.cellId].center.clone();
-      // 出发点：沿"城市→走廊"方向再向外延伸，编队从走廊外侧压进来
       const startBase = cityDir.clone().lerp(lane.center, 1.7).normalize();
       const ref = Math.abs(startBase.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
       const e1 = new THREE.Vector3().crossVectors(startBase, ref).normalize();
       const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
 
-      // 每条虫河：统一高度带 + 小幅个体散布，凝成整体而非碎屑
-      const COL_SIZE = 22;
-      const riverAlt = 1.1 + this.rand() * 0.1;
       const n = Math.min(per, count - r * per);
-      let colE1 = 0, colE2 = 0;
+      const rollDepth = n * 0.015; // 海浪厚度：随数量拉长，持续席卷
       for (let i = 0; i < n; i++) {
-        const col = Math.floor(i / COL_SIZE);
-        if (i % COL_SIZE === 0) {
-          colE1 = (this.rand() - 0.5) * 0.15;
-          colE2 = (this.rand() - 0.5) * 0.15;
-        }
-        const spread = colE1 + (this.rand() - 0.5) * 0.07;
-        const spread2 = colE2 + (this.rand() - 0.5) * 0.07;
+        // 出生面：双随机近似高斯的宽幕（±0.55），中密边疏
+        const spread = (this.rand() + this.rand() - 1) * 0.55;
+        const spread2 = (this.rand() + this.rand() - 1) * 0.4;
         const dir = startBase.clone().addScaledVector(e1, spread).addScaledVector(e2, spread2).normalize();
+        // 目标也散布在城市周边一片区域：中途保持海面宽度，末段才收拢
+        const tgt = cityDir.clone()
+          .addScaledVector(e1, (this.rand() - 0.5) * 0.3)
+          .addScaledVector(e2, (this.rand() - 0.5) * 0.3).normalize();
         this.spawnWingUnit(dir, city.cellId, WING_ALT,
-          (i % COL_SIZE) * 0.03 + col * 0.06 + r * 0.08,
-          riverAlt + (this.rand() - 0.5) * 0.06);
+          this.rand() * rollDepth,
+          1.2 + this.rand() * 0.18, tgt);
       }
     }
   }
 
   /** 生成单只蜂群：startRadius > 巡航高度时为"虫巢流"（俯冲进场 + 螺旋队形） */
-  private spawnWingUnit(startDir: THREE.Vector3, cityCell: number, startRadius: number, delayProgress: number, cruiseAlt?: number) {
+  private spawnWingUnit(startDir: THREE.Vector3, cityCell: number, startRadius: number, delayProgress: number, cruiseAlt?: number, targetDir?: THREE.Vector3) {
     if (this.orbitals.filter((o) => o.kind === 'wing' && o.alive).length > WING_CAP) return;
     const o = this.baseOrbital('wing', WING_HP);
     o.landCell = cityCell;
     o.basisN = startDir.clone();
-    o.basisU = this.grid.cells[cityCell].center.clone();
+    o.basisU = targetDir ?? this.grid.cells[cityCell].center.clone();
     o.orbitAngle = o.basisN.angleTo(o.basisU); // 总航程角
     o.theta = -delayProgress;                  // 进度（负值 = 延迟出场）
     o.dropTimer = startRadius;                 // 出发高度
     o.deployTimer = this.rand() * Math.PI * 2; // 螺旋相位
-    o.wingAlt = cruiseAlt ?? (1.1 + this.rand() * 0.12); // 巡航高度（同波共享高度带）
-    o.swirlAmp = 0.012 + this.rand() * 0.015;  // 个体小幅摆动：活但不散
+    o.wingAlt = cruiseAlt ?? (1.2 + this.rand() * 0.16); // 巡航高度（高空层厚海面）
+    o.swirlAmp = 0.018 + this.rand() * 0.025;  // 个体摆动：海面的涌动质感
     o.group.visible = false;                   // 蜂群走实例化渲染池
     this.orbitals.push(o);
   }
@@ -1703,15 +1698,21 @@ export class Game {
             const targets = this.cities.filter((c) => c.alive);
             if (targets.length) {
               const city = targets[Math.floor(this.rand() * targets.length)];
-              const squadAlt = 1.1 + this.rand() * 0.1; // 本批虫流的主高度带
+              const cityDir2 = this.grid.cells[city.cellId].center;
+              const ref2 = Math.abs(cityDir2.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+              const te1 = new THREE.Vector3().crossVectors(cityDir2, ref2).normalize();
+              const te2 = new THREE.Vector3().crossVectors(cityDir2, te1).normalize();
               for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
+                // 出生即散开成一片：宽幕喷涌 + 目标散布城市周边
                 const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
-                  .multiplyScalar(0.09);
-                // 8 只一组的子纵队，涌出而非排队
+                  .multiplyScalar(0.32);
+                const tgt = cityDir2.clone()
+                  .addScaledVector(te1, (this.rand() - 0.5) * 0.3)
+                  .addScaledVector(te2, (this.rand() - 0.5) * 0.3).normalize();
                 this.spawnWingUnit(
                   o.orbitAxis.clone().add(jitter).normalize(), city.cellId,
-                  HIVE_RADIUS, (w % 8) * 0.03 + Math.floor(w / 8) * 0.08,
-                  squadAlt + (this.rand() - 0.5) * 0.05);
+                  HIVE_RADIUS, this.rand() * HIVE_SQUAD_SIZE * 0.02,
+                  1.2 + this.rand() * 0.18, tgt);
               }
               this.spawnRing(o.group.position.clone(), COL_ROSE, 0.12);
               sfx.play('jam', 400);
@@ -1734,16 +1735,16 @@ export class Game {
           o.theta += dt * 0.95;
           if (o.theta < -2.35) continue; // 编队错峰出场
           o.group.visible = true;
-          const r = 1.5 - Math.max(0, (o.theta + 1.0) / 1.0) * 0.3;
+          const r = 1.65 - Math.max(0, (o.theta + 1.0) / 1.0) * 0.35;
           o.group.position.copy(o.basisN.clone().multiplyScalar(Math.cos(o.theta))
             .addScaledVector(o.basisU, Math.sin(o.theta)).multiplyScalar(r));
           o.group.rotation.y += dt * 5;
           if (o.theta >= 0) { o.phase = 'descend'; o.descendT = 0; }
         } else if (o.phase === 'descend') {
           // 高速俯冲
-          o.descendT += dt / 0.9;
+          o.descendT += dt / 1.0;
           const k = Math.min(1, o.descendT);
-          o.group.position.copy(o.basisN.clone().multiplyScalar(1.2 - k * k * 0.18));
+          o.group.position.copy(o.basisN.clone().multiplyScalar(1.3 - k * k * 0.28));
           o.group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), o.basisN.clone().negate());
           if (k >= 1) {
             // 撞击城市
