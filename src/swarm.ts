@@ -28,7 +28,11 @@ const SLOTS = 1024;
 const BUGS_PER_SLOT = 512;
 const FADE = 0.55;
 
-interface Slot { owner: SwarmParent | null; deathAt: number; frontId: number }
+interface Slot {
+  owner: SwarmParent | null; deathAt: number; frontId: number;
+  // 平滑航向（整团虫统一朝向）+ 上一帧位置
+  hx: number; hy: number; hz: number; lx: number; ly: number; lz: number; hasLast: boolean;
+}
 
 // ---- GLSL 公用片段 ----
 const HASH = /* glsl */ `
@@ -196,8 +200,10 @@ const RENDER_VERT = /* glsl */ `
       if (birth > 0.0) { float g = clamp((uTime - birth) / 1.0, 0.0, 1.0); g = g * g * (3.0 - 2.0 * g); scale *= g; vAlpha *= g; }
     }
 
-    // 按速度朝向蝶形体（真实航向，tip = +z）
-    vec3 fwd = length(vel) > 1e-4 ? normalize(vel) : vec3(0.0, 0.0, 1.0);
+    // 朝向：整团虫统一朝【蜂群航向】飞（ROW2），消除内部各自乱飞；航向太小则回退朝星球
+    vec3 head = skelRow(slot, 0.625).xyz;
+    vec3 fwd = length(head) > 0.03 ? normalize(head)
+             : (length(pos) > 1e-3 ? normalize(-pos) : vec3(0.0, 0.0, 1.0));
     vec3 up = abs(fwd.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
     vec3 right = normalize(cross(up, fwd));
     up = cross(fwd, right);
@@ -228,11 +234,6 @@ export class SwarmSea {
   private freeSlots: number[] = [];
   private slotOf = new Map<SwarmParent, number>();
   private activeCount = 0;
-  // render() 复用的临时结构（避免每帧分配）
-  private _fronts = new Map<number, { x: number; y: number; z: number; n: number }>();
-  private _active: number[] = [];
-  // 每个锋面的深空源点（锋面诞生时快照一次，固定不动）
-  private frontOrigin = new Map<number, { x: number; y: number; z: number }>();
 
   constructor(parent: THREE.Object3D, renderer: THREE.WebGLRenderer) {
     // ---- 骨架纹理（CPU 每帧写，与虫数无关）：4 行 = 位置/状态 + 生死时刻 + 目标D + 源点O ----
@@ -257,8 +258,8 @@ export class SwarmSea {
       v.material.uniforms.uDt = { value: 0 };
     }
     this.velVar.material.uniforms.uSeek = { value: 1.6 };    // 汇聚力（贴住蜂群，塔打中即死）
-    this.velVar.material.uniforms.uTurb = { value: 0.05 };  // 湍流涌动
-    this.velVar.material.uniforms.uSep = { value: 0.0016 }; // 分离力（防重叠、保持间距）
+    this.velVar.material.uniforms.uTurb = { value: 0.022 }; // 湍流（调小 → 内部更平顺）
+    this.velVar.material.uniforms.uSep = { value: 0.0014 }; // 分离力（防重叠、保持间距）
     this.velVar.material.uniforms.uMaxSpeed = { value: 0.4 };
     const err = this.gpu.init();
     if (err) console.error('[swarm] GPGPU init:', err);
@@ -305,7 +306,7 @@ export class SwarmSea {
     parent.add(mesh);
 
     for (let s = SLOTS - 1; s >= 0; s--) {
-      this.slots.push({ owner: null, deathAt: 0, frontId: 0 });
+      this.slots.push({ owner: null, deathAt: 0, frontId: 0, hx: 0, hy: 0, hz: 0, lx: 0, ly: 0, lz: 0, hasLast: false });
       this.freeSlots.push(s);
     }
   }
@@ -314,7 +315,7 @@ export class SwarmSea {
   addWing(w: SwarmParent, frontId: number) {
     const slot = this.freeSlots.pop();
     if (slot === undefined) return; // 槽满：静默降级
-    this.slots[slot] = { owner: w, deathAt: 0, frontId };
+    this.slots[slot] = { owner: w, deathAt: 0, frontId, hx: 0, hy: 0, hz: 0, lx: 0, ly: 0, lz: 0, hasLast: false };
     this.slotOf.set(w, slot);
     const t = slot * 4;
     this.skelData[t + 3] = -1;            // state 隐藏
@@ -324,10 +325,8 @@ export class SwarmSea {
 
   /** 每帧：同步骨架 → 纹理，跑 GPGPU 积分，更新渲染 uniform。dt = 模拟步长（含倍速）。 */
   render(dt: number, time: number) {
-    const fronts = this._fronts; fronts.clear();
-    const active = this._active; active.length = 0;
+    const CROW = SLOTS * 2 * 4; // 行2 = 蜂群平滑航向（整团虫统一朝向）
     let maxSlot = -1;
-    // 趟 1：写各槽状态，同时累加每个锋面的质心
     for (let s = 0; s < SLOTS; s++) {
       const slot = this.slots[s];
       const t = s * 4;
@@ -359,32 +358,25 @@ export class SwarmSea {
       this.skelData[t + 3] = w.group.visible ? Math.max(0.02, w.hp / w.maxHp) : -1;
       if (w.group.visible && this.skelData[mt + 1] === 0) this.skelData[mt + 1] = time;
       maxSlot = s;
+      // 平滑航向：由蜂群位移得到，整团虫统一朝这个方向飞（消除内部乱飞）
       if (w.group.visible) {
-        let f = fronts.get(slot.frontId);
-        if (!f) { f = { x: 0, y: 0, z: 0, n: 0 }; fronts.set(slot.frontId, f); }
-        f.x += p.x; f.y += p.y; f.z += p.z; f.n++;
-        active.push(s);
+        if (slot.hasLast) {
+          let dx = p.x - slot.lx, dy = p.y - slot.ly, dz = p.z - slot.lz;
+          const dl = Math.hypot(dx, dy, dz);
+          if (dl > 1e-6) {
+            dx /= dl; dy /= dl; dz /= dl;
+            slot.hx = slot.hx * 0.9 + dx * 0.1;
+            slot.hy = slot.hy * 0.9 + dy * 0.1;
+            slot.hz = slot.hz * 0.9 + dz * 0.1;
+          }
+        }
+        slot.lx = p.x; slot.ly = p.y; slot.lz = p.z; slot.hasLast = true;
+        const ct = CROW + t;
+        this.skelData[ct] = slot.hx;
+        this.skelData[ct + 1] = slot.hy;
+        this.skelData[ct + 2] = slot.hz;
       }
     }
-    // 趟 2：写目标D(行2=质心) 与 源点O(行3=锋面诞生时的深空方向，固定)
-    const CROW = SLOTS * 2 * 4, OROW = SLOTS * 3 * 4;
-    const ORIGIN_R = 4.8; // 源点更深入太空
-    for (const s of active) {
-      const fid = this.slots[s].frontId;
-      const f = fronts.get(fid)!;
-      const cx = f.x / f.n, cy = f.y / f.n, cz = f.z / f.n;
-      let o = this.frontOrigin.get(fid);
-      if (!o) {
-        const l = Math.hypot(cx, cy, cz) || 1;
-        o = { x: (cx / l) * ORIGIN_R, y: (cy / l) * ORIGIN_R, z: (cz / l) * ORIGIN_R };
-        this.frontOrigin.set(fid, o);
-      }
-      const ct = CROW + s * 4, ot = OROW + s * 4;
-      this.skelData[ct] = cx; this.skelData[ct + 1] = cy; this.skelData[ct + 2] = cz;
-      this.skelData[ot] = o.x; this.skelData[ot + 1] = o.y; this.skelData[ot + 2] = o.z;
-    }
-    // 清理已消失锋面的源点
-    for (const k of this.frontOrigin.keys()) if (!fronts.has(k)) this.frontOrigin.delete(k);
     this.skelTex.needsUpdate = true;
 
     // GPGPU 积分（每帧一次，与倍速子步解耦；dt 已含倍速）
