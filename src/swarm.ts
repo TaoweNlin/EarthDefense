@@ -86,17 +86,10 @@ const POS_SHADER = /* glsl */ `
     vec4 s1 = skelRow(slot, ROW1);   // x=死亡时刻, y=进场时刻
     float state = s0.w, death = s1.x, birth = s1.y;
 
-    vec3 O, D, axis, e1, e2;
-    streamFrame(slot, O, D, axis, e1, e2);
-
-    // 出生重置：从一个【巨大的圆盘面】均匀撒出（深空侧），之后各自朝目标飞 → 自然收束成漏斗
+    // 出生重置：在【自己所属蜂群】附近散开显形 —— 虫子与作战单位同位，塔打中就死
     if (birth > 0.0 && pos.w != birth) {
-      vec3 rnd = hash33(vec3(index) + 1.7);
-      float ang = rnd.x * 6.2831853;
-      float rad = sqrt(rnd.y) * 1.15;             // 均匀圆盘，半径更大 = 出生面更大
-      vec3 disc = (e1 * cos(ang) + e2 * sin(ang)) * rad;
-      vec3 sp = O + disc + axis * (rnd.z * 0.7);  // 面 + 纵深，避免一层薄片
-      gl_FragColor = vec4(sp, birth);
+      vec3 off = (hash33(vec3(index) + 1.7) - 0.5) * 0.3;
+      gl_FragColor = vec4(s0.xyz + off, birth);
       return;
     }
     // 未激活/已回收：冻结
@@ -128,19 +121,18 @@ const VEL_SHADER = /* glsl */ `
     vec4 s1 = skelRow(slot, ROW1);
     float state = s0.w, death = s1.x, birth = s1.y;
 
-    vec3 O, D, axis, e1, e2;
-    streamFrame(slot, O, D, axis, e1, e2);
+    vec3 wingPos = s0.xyz;
 
     if (birth > 0.0 && pos.w != birth) {
-      gl_FragColor = vec4(axis * 0.06, 0.0); // 出生即朝目标带一点初速度（慢）
+      gl_FragColor = vec4((hash33(vec3(index) + 7.0) - 0.5) * 0.04, 0.0);
       return;
     }
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = vec4(0.0); return; }
 
     vec3 v = vel.xyz;
-    // 1) 汇聚（缓）：目标是城市周边一大片区域，每虫一个稳定落点 → 不挤成一坨、抵达后自然铺开
-    vec3 tgtOff = (hash33(vec3(index) + 9.1) - 0.5) * 2.0; // [-1,1]^3
-    vec3 goal = D + tgtOff * 0.6;
+    // 1) 贴住自己的蜂群：每虫一个稳定偏移 → 绕蜂群成一团松散小云（与作战单位同位）
+    vec3 goff = (hash33(vec3(index) + 9.1) - 0.5) * 2.0;
+    vec3 goal = wingPos + goff * 0.17;
     vec3 toG = goal - pos.xyz;
     float d = length(toG);
     vec3 seek = (d > 1e-4 ? toG / d : vec3(0.0)) * uSeek;
@@ -158,7 +150,7 @@ const VEL_SHADER = /* glsl */ `
     vec3 acc = seek + turb + sep * uSep;
 
     if (state <= 0.0 && death > 0.0) {
-      acc += normalize(pos.xyz - D + vec3(1e-4)) * 0.5; // 死亡向外飘散
+      acc += normalize(pos.xyz - wingPos + vec3(1e-4)) * 0.5; // 死亡向外飘散
     }
 
     v += acc * uDt;
@@ -264,10 +256,10 @@ export class SwarmSea {
       v.material.uniforms.uTime = { value: 0 };
       v.material.uniforms.uDt = { value: 0 };
     }
-    this.velVar.material.uniforms.uSeek = { value: 0.5 };    // 汇聚力（缓，不挤成坨）
+    this.velVar.material.uniforms.uSeek = { value: 1.6 };    // 汇聚力（贴住蜂群，塔打中即死）
     this.velVar.material.uniforms.uTurb = { value: 0.05 };  // 湍流涌动
     this.velVar.material.uniforms.uSep = { value: 0.0016 }; // 分离力（防重叠、保持间距）
-    this.velVar.material.uniforms.uMaxSpeed = { value: 0.27 }; // 飞得更慢
+    this.velVar.material.uniforms.uMaxSpeed = { value: 0.4 };
     const err = this.gpu.init();
     if (err) console.error('[swarm] GPGPU init:', err);
 
