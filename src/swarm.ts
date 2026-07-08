@@ -58,20 +58,14 @@ const IDX = /* glsl */ `
   vec4 skelRow(float slot, float row) {
     return texture2D(uSkel, vec2((slot + 0.5) / ${SLOTS}.0, row));
   }
-  // 河道坐标系：给定槽，算出源点O、目标D、流向axis、河长len、该虫的横向车道lane
-  void streamFrame(float slot, float index, out vec3 O, out vec3 D, out vec3 axis, out float len, out vec3 lane) {
+  // 出生面坐标系：给定槽，算出源点O、目标D、流向axis、垂直于流向的圆盘基 e1/e2
+  void streamFrame(float slot, out vec3 O, out vec3 D, out vec3 axis, out vec3 e1, out vec3 e2) {
     D = skelRow(slot, ROW2).xyz;
     O = skelRow(slot, ROW3).xyz;
-    vec3 d = D - O;
-    len = length(d);
-    axis = d / max(len, 1e-4);
-    vec3 rnd = hash33(vec3(index) + 3.3);
+    axis = normalize(D - O + vec3(1e-5));
     vec3 up = abs(axis.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-    vec3 e1 = normalize(cross(axis, up));
-    vec3 e2 = cross(axis, e1);
-    float ang = rnd.x * 6.2831853;
-    float rad = 0.03 + rnd.y * rnd.y * 0.2; // 河道半径：细长 → 河流感（核心密边缘疏）
-    lane = (e1 * cos(ang) + e2 * sin(ang)) * rad;
+    e1 = normalize(cross(axis, up));
+    e2 = cross(axis, e1);
   }
 `;
 
@@ -92,25 +86,24 @@ const POS_SHADER = /* glsl */ `
     vec4 s1 = skelRow(slot, ROW1);   // x=死亡时刻, y=进场时刻
     float state = s0.w, death = s1.x, birth = s1.y;
 
-    vec3 O, D, axis, lane; float len;
-    streamFrame(slot, index, O, D, axis, len, lane);
+    vec3 O, D, axis, e1, e2;
+    streamFrame(slot, O, D, axis, e1, e2);
 
-    // 出生重置：虫沿河道从源到目标散布 → 一开场就是一条流，而非一个点
+    // 出生重置：从一个【巨大的圆盘面】均匀撒出（深空侧），之后各自朝目标飞 → 自然收束成漏斗
     if (birth > 0.0 && pos.w != birth) {
-      float u = hash33(vec3(index) + 1.7).x;
-      gl_FragColor = vec4(O + axis * (u * len) + lane, birth);
+      vec3 rnd = hash33(vec3(index) + 1.7);
+      float ang = rnd.x * 6.2831853;
+      float rad = sqrt(rnd.y) * 0.75;             // 均匀圆盘，半径大 = 出生面大
+      vec3 disc = (e1 * cos(ang) + e2 * sin(ang)) * rad;
+      vec3 sp = O + disc + axis * (rnd.z * 0.5);  // 面 + 少量纵深，避免一层薄片
+      gl_FragColor = vec4(sp, birth);
       return;
     }
     // 未激活/已回收：冻结
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = pos; return; }
 
-    vec3 np = pos.xyz + vel.xyz * uDt;
-    // 流到终点 → 绕回源头，形成持续奔涌的河（死亡飘散的尸体不绕回）
-    if (death <= 0.0) {
-      float along = dot(np - O, axis);
-      if (along > len) np = O + lane + axis * (hash33(vec3(index) + 5.1).x * 0.15);
-    }
-    gl_FragColor = vec4(np, pos.w);
+    // 直接积分，不绕回：虫从面飞向目标一次，抵达后由蜂群生命周期消散
+    gl_FragColor = vec4(pos.xyz + vel.xyz * uDt, pos.w);
   }
 `;
 
@@ -120,8 +113,8 @@ const VEL_SHADER = /* glsl */ `
   uniform float uTime;
   uniform float uDt;
   uniform float uSeek;
-  uniform float uFlow;
   uniform float uTurb;
+  uniform float uSep;
   uniform float uMaxSpeed;
   ${HASH}
   ${IDX}
@@ -135,30 +128,35 @@ const VEL_SHADER = /* glsl */ `
     vec4 s1 = skelRow(slot, ROW1);
     float state = s0.w, death = s1.x, birth = s1.y;
 
-    vec3 O, D, axis, lane; float len;
-    streamFrame(slot, index, O, D, axis, len, lane);
+    vec3 O, D, axis, e1, e2;
+    streamFrame(slot, O, D, axis, e1, e2);
 
     if (birth > 0.0 && pos.w != birth) {
-      gl_FragColor = vec4(axis * uFlow, 0.0); // 出生即带着流向的初速度
+      gl_FragColor = vec4(axis * 0.15, 0.0); // 出生即朝目标带初速度
       return;
     }
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = vec4(0.0); return; }
 
     vec3 v = vel.xyz;
-    // 河道约束：拉回到"轴线上最近点 + 该虫车道"，越接近终点河道越收窄（漏斗汇入）
-    float along = clamp(dot(pos.xyz - O, axis), 0.0, len);
-    float taper = mix(1.0, 0.4, along / max(len, 1e-4));
-    vec3 laneTarget = O + axis * along + lane * taper;
-    vec3 channel = (laneTarget - pos.xyz) * uSeek;
-    // 沿河推进
-    vec3 flowF = axis * uFlow;
-    // 湍流（流场随位置相干 → 河面涟漪，而非各自乱抖）
+    // 1) 汇聚：各自朝目标 D 飞
+    vec3 toD = D - pos.xyz;
+    float d = length(toD);
+    vec3 seek = (d > 1e-4 ? toD / d : vec3(0.0)) * uSeek;
+    // 2) 湍流：位置相干流场 → 整体涌动而非各自乱抖
     vec3 turb = flow(pos.xyz, uTime) * uTurb;
-    vec3 acc = channel + flowF + turb;
+    // 3) 分离：体积不重叠——采样同区少数邻居，太近就互斥，收束成不规则管道而非塌成一点
+    vec3 sep = vec3(0.0);
+    for (int k = 0; k < 6; k++) {
+      vec3 h = hash33(vec3(index * 0.017, float(k) * 4.13, floor(uTime * 20.0)));
+      vec2 sUv = uv + (h.xy - 0.5) * vec2(64.0 / ${TEX_W}.0, 64.0 / ${TEX_H}.0);
+      vec3 diff = pos.xyz - texture2D(texPosition, sUv).xyz;
+      float dd = dot(diff, diff);
+      if (dd < 0.0016 && dd > 1e-9) sep += diff * (1.0 / dd);
+    }
+    vec3 acc = seek + turb + sep * uSep;
 
-    // 死亡飘散：一次垂直河道的外冲，随后滑行
     if (state <= 0.0 && death > 0.0) {
-      acc += normalize(lane + 0.001) * 0.5;
+      acc += normalize(pos.xyz - D + vec3(1e-4)) * 0.5; // 死亡向外飘散
     }
 
     v += acc * uDt;
@@ -264,10 +262,10 @@ export class SwarmSea {
       v.material.uniforms.uTime = { value: 0 };
       v.material.uniforms.uDt = { value: 0 };
     }
-    this.velVar.material.uniforms.uSeek = { value: 3.5 };   // 河道约束力
-    this.velVar.material.uniforms.uFlow = { value: 0.6 };   // 沿河流速
-    this.velVar.material.uniforms.uTurb = { value: 0.06 };  // 河面涟漪
-    this.velVar.material.uniforms.uMaxSpeed = { value: 1.0 };
+    this.velVar.material.uniforms.uSeek = { value: 1.4 };    // 汇聚力（朝目标）
+    this.velVar.material.uniforms.uTurb = { value: 0.05 };  // 湍流涌动
+    this.velVar.material.uniforms.uSep = { value: 0.0009 }; // 分离力（防重叠 → 管道）
+    this.velVar.material.uniforms.uMaxSpeed = { value: 0.5 };
     const err = this.gpu.init();
     if (err) console.error('[swarm] GPGPU init:', err);
 
