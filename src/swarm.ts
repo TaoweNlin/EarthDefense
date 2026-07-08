@@ -111,7 +111,7 @@ const VEL_SHADER = /* glsl */ `
   uniform float uDt;
   uniform float uSeek;
   uniform float uTurb;
-  uniform float uSep;
+  uniform float uDamp;
   uniform float uMaxSpeed;
   ${HASH}
   ${IDX}
@@ -134,33 +134,22 @@ const VEL_SHADER = /* glsl */ `
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = vec4(0.0); return; }
 
     vec3 v = vel.xyz;
-    // 1) 贴住自己的蜂群：每虫一个稳定偏移 → 绕蜂群成一团松散小云（与作战单位同位）
+    // 贴住蜂群：每虫一个稳定"家点"，用【弹簧+强阻尼】平滑归位——临界阻尼不振荡，杜绝原地颤抖
     vec3 goff = (hash33(vec3(index) + 9.1) - 0.5) * 2.0;
-    vec3 goal = wingPos + goff * 0.17;
-    vec3 toG = goal - pos.xyz;
-    float d = length(toG);
-    vec3 seek = (d > 1e-4 ? toG / d : vec3(0.0)) * uSeek;
-    // 2) 湍流：位置相干流场 → 整体涌动而非各自乱抖
-    vec3 turb = flow(pos.xyz, uTime) * uTurb;
-    // 3) 分离：体积不重叠——采样同区少数邻居，太近就互斥，保持间距不挤成一坨
-    vec3 sep = vec3(0.0);
-    for (int k = 0; k < 6; k++) {
-      vec3 h = hash33(vec3(index * 0.017, float(k) * 4.13, floor(uTime * 20.0)));
-      vec2 sUv = uv + (h.xy - 0.5) * vec2(72.0 / ${TEX_W}.0, 72.0 / ${TEX_H}.0);
-      vec3 diff = pos.xyz - texture2D(texPosition, sUv).xyz;
-      float dd = dot(diff, diff);
-      if (dd < 0.004 && dd > 1e-9) sep += diff * (1.0 / dd);
-    }
-    vec3 acc = seek + turb + sep * uSep;
+    vec3 goal = wingPos + goff * 0.18;
+    vec3 spring = (goal - pos.xyz) * uSeek;                  // 弹簧力（与距离成正比）
+    // 低频、空间相干的缓慢漂移（一团虫一起飘，不是相邻各自抖）
+    vec3 turb = flow(pos.xyz * 0.5, uTime * 0.4) * uTurb;
+    vec3 acc = spring + turb;
 
     if (state <= 0.0 && death > 0.0) {
-      acc += normalize(pos.xyz - wingPos + vec3(1e-4)) * 0.5; // 死亡向外飘散
+      acc += normalize(pos.xyz - wingPos + vec3(1e-4)) * 6.0; // 死亡向外飘散
     }
 
     v += acc * uDt;
+    v *= uDamp;          // 强阻尼 → 平滑收敛，不来回振荡
     float sp = length(v);
     if (sp > uMaxSpeed) v *= uMaxSpeed / sp;
-    v *= 0.985;
 
     gl_FragColor = vec4(v, 0.0);
   }
@@ -257,10 +246,10 @@ export class SwarmSea {
       v.material.uniforms.uTime = { value: 0 };
       v.material.uniforms.uDt = { value: 0 };
     }
-    this.velVar.material.uniforms.uSeek = { value: 1.6 };    // 汇聚力（贴住蜂群，塔打中即死）
-    this.velVar.material.uniforms.uTurb = { value: 0.022 }; // 湍流（调小 → 内部更平顺）
-    this.velVar.material.uniforms.uSep = { value: 0.0014 }; // 分离力（防重叠、保持间距）
-    this.velVar.material.uniforms.uMaxSpeed = { value: 0.4 };
+    this.velVar.material.uniforms.uSeek = { value: 7.0 };    // 弹簧系数（配强阻尼 = 临界阻尼，平滑归位）
+    this.velVar.material.uniforms.uTurb = { value: 0.014 }; // 低频漂移（很轻，只保留一点生命感）
+    this.velVar.material.uniforms.uDamp = { value: 0.9 };   // 强阻尼，杜绝振荡颤抖
+    this.velVar.material.uniforms.uMaxSpeed = { value: 0.5 };
     const err = this.gpu.init();
     if (err) console.error('[swarm] GPGPU init:', err);
 
