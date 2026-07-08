@@ -69,7 +69,7 @@ const HORDE_MUL = 1.5;
 // 空中单位（立体防御的主角，只能被防空火力击落）
 const WING_HP = 20;            // 飞行蜂群：有一定韧性，防空需要认真投入
 const WING_REWARD = 2;
-const WING_SPEED = 0.055;      // 角速度 rad/s，缓慢推进
+const WING_SPEED = 0.034;      // 角速度 rad/s，缓慢推进（放慢 → 虫潮持续更久、覆盖更广）
 const WING_ALT = 1.27;         // 巡航高度：高空层，强化体积感
 const WING_IMPACT_DAMAGE = 1;
 const DIVER_HP = 60;
@@ -1460,9 +1460,10 @@ export class Game {
   private spawnWings(count: number) {
     const targets = this.cities.filter((c) => c.alive);
     if (!targets.length || !this.laneCells.length) return;
-    // 多个方向的海面（1~3 片），各自席卷向最近的城市
+    // 刷更多：整体放大虫量（受 900 逻辑蜂群上限约束）
+    count = Math.min(880, Math.round(count * 1.8));
     // 普通波次 = 一个大群整体涌来；只有超大潮汐才分成两股夹击
-    const fronts = count > 160 ? 2 : 1;
+    const fronts = count > 320 ? 2 : 1;
     const per = Math.ceil(count / fronts);
     const laneStart = Math.floor(this.rand() * this.laneCells.length);
     for (let r = 0; r < fronts; r++) {
@@ -1479,7 +1480,7 @@ export class Game {
       const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
 
       const n = Math.min(per, count - r * per);
-      const rollDepth = n * 0.028; // 海浪厚度：拉长倾泻时间，保证波次持续性不空场
+      const rollDepth = n * 0.055; // 海浪厚度：拉长倾泻时间，刷更久不空场
       this.currentFront = ++this.frontSeq; // 每条锋面 = 一个大群
       // 虫洞裂隙：锋面中心撕开次元裂口，虫群从这一带穿梭显形
       this.spawnRift(startBase, Math.min(34, 6 + rollDepth * 22));

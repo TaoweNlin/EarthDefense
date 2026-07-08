@@ -93,9 +93,9 @@ const POS_SHADER = /* glsl */ `
     if (birth > 0.0 && pos.w != birth) {
       vec3 rnd = hash33(vec3(index) + 1.7);
       float ang = rnd.x * 6.2831853;
-      float rad = sqrt(rnd.y) * 0.75;             // 均匀圆盘，半径大 = 出生面大
+      float rad = sqrt(rnd.y) * 1.15;             // 均匀圆盘，半径更大 = 出生面更大
       vec3 disc = (e1 * cos(ang) + e2 * sin(ang)) * rad;
-      vec3 sp = O + disc + axis * (rnd.z * 0.5);  // 面 + 少量纵深，避免一层薄片
+      vec3 sp = O + disc + axis * (rnd.z * 0.7);  // 面 + 纵深，避免一层薄片
       gl_FragColor = vec4(sp, birth);
       return;
     }
@@ -132,26 +132,28 @@ const VEL_SHADER = /* glsl */ `
     streamFrame(slot, O, D, axis, e1, e2);
 
     if (birth > 0.0 && pos.w != birth) {
-      gl_FragColor = vec4(axis * 0.15, 0.0); // 出生即朝目标带初速度
+      gl_FragColor = vec4(axis * 0.06, 0.0); // 出生即朝目标带一点初速度（慢）
       return;
     }
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = vec4(0.0); return; }
 
     vec3 v = vel.xyz;
-    // 1) 汇聚：各自朝目标 D 飞
-    vec3 toD = D - pos.xyz;
-    float d = length(toD);
-    vec3 seek = (d > 1e-4 ? toD / d : vec3(0.0)) * uSeek;
+    // 1) 汇聚（缓）：目标是城市周边一大片区域，每虫一个稳定落点 → 不挤成一坨、抵达后自然铺开
+    vec3 tgtOff = (hash33(vec3(index) + 9.1) - 0.5) * 2.0; // [-1,1]^3
+    vec3 goal = D + tgtOff * 0.6;
+    vec3 toG = goal - pos.xyz;
+    float d = length(toG);
+    vec3 seek = (d > 1e-4 ? toG / d : vec3(0.0)) * uSeek;
     // 2) 湍流：位置相干流场 → 整体涌动而非各自乱抖
     vec3 turb = flow(pos.xyz, uTime) * uTurb;
-    // 3) 分离：体积不重叠——采样同区少数邻居，太近就互斥，收束成不规则管道而非塌成一点
+    // 3) 分离：体积不重叠——采样同区少数邻居，太近就互斥，保持间距不挤成一坨
     vec3 sep = vec3(0.0);
     for (int k = 0; k < 6; k++) {
       vec3 h = hash33(vec3(index * 0.017, float(k) * 4.13, floor(uTime * 20.0)));
-      vec2 sUv = uv + (h.xy - 0.5) * vec2(64.0 / ${TEX_W}.0, 64.0 / ${TEX_H}.0);
+      vec2 sUv = uv + (h.xy - 0.5) * vec2(72.0 / ${TEX_W}.0, 72.0 / ${TEX_H}.0);
       vec3 diff = pos.xyz - texture2D(texPosition, sUv).xyz;
       float dd = dot(diff, diff);
-      if (dd < 0.0016 && dd > 1e-9) sep += diff * (1.0 / dd);
+      if (dd < 0.004 && dd > 1e-9) sep += diff * (1.0 / dd);
     }
     vec3 acc = seek + turb + sep * uSep;
 
@@ -262,10 +264,10 @@ export class SwarmSea {
       v.material.uniforms.uTime = { value: 0 };
       v.material.uniforms.uDt = { value: 0 };
     }
-    this.velVar.material.uniforms.uSeek = { value: 1.4 };    // 汇聚力（朝目标）
+    this.velVar.material.uniforms.uSeek = { value: 0.5 };    // 汇聚力（缓，不挤成坨）
     this.velVar.material.uniforms.uTurb = { value: 0.05 };  // 湍流涌动
-    this.velVar.material.uniforms.uSep = { value: 0.0009 }; // 分离力（防重叠 → 管道）
-    this.velVar.material.uniforms.uMaxSpeed = { value: 0.5 };
+    this.velVar.material.uniforms.uSep = { value: 0.0016 }; // 分离力（防重叠、保持间距）
+    this.velVar.material.uniforms.uMaxSpeed = { value: 0.27 }; // 飞得更慢
     const err = this.gpu.init();
     if (err) console.error('[swarm] GPGPU init:', err);
 
@@ -374,7 +376,7 @@ export class SwarmSea {
     }
     // 趟 2：写目标D(行2=质心) 与 源点O(行3=锋面诞生时的深空方向，固定)
     const CROW = SLOTS * 2 * 4, OROW = SLOTS * 3 * 4;
-    const ORIGIN_R = 2.9;
+    const ORIGIN_R = 4.8; // 源点更深入太空
     for (const s of active) {
       const fid = this.slots[s].frontId;
       const f = fronts.get(fid)!;
