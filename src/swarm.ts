@@ -1,16 +1,17 @@
-// GPU 虫海：50 万只级别的连续群体渲染。
+// GPGPU 虫海：每只虫都是真实个体（几十万级）。
 //
-// 架构（骨架纹理 + 顶点着色器求值）：
-// - CPU 每帧只把 ≤1024 个逻辑蜂群（骨架）的位置/血量/死亡时间写进一张 1024×2 浮点纹理（16KB）；
-// - 每只虫的骨架索引、插值比、相位等是【出生时写一次】的静态实例属性；
-// - 位置在顶点着色器里现场求值：骨架A/B 插值 + 正弦摆动 + 静态体积偏移，
-//   死亡淡出、血量减员、延迟进场全部由纹理状态驱动，CPU 零逐虫开销。
+// 架构（位置/速度浮点纹理 + GPU ping-pong 积分）：
+// - 每只虫的【位置】和【速度】各存进一张浮点纹理，GPUComputationRenderer 每帧在 GPU 上积分
+//   （位置 += 速度·dt；速度 += 受力·dt）——这是"真个体"的根：每只虫有自己的动量和轨迹。
+// - 受力 = 目标吸引（飞向所属逻辑蜂群/城市）+ 湍流流场（curl-like）+ 限速/阻尼（惯性）。
+// - 逻辑蜂群（骨架）仍是玩法实体：被瞄准、有血、被击杀。CPU 每帧只把 ≤1024 个骨架的
+//   位置/血量/生死时刻写进 1024×2 小纹理；虫子的目标、血量减员、生死由骨架纹理驱动。
 //
-// 槽位模型：1024 个骨架槽，每槽固定拥有 512 只虫的实例区间。
-// 蜂群生成 → 占一个槽并重写该区间属性；死亡 → 纹理写入死亡时间（着色器播放碎裂淡出）；
-// 淡出结束 → 槽回收。instanceCount 随最高活跃槽收缩，空场时 GPU 零负担。
+// 槽位模型：1024 槽 × 512 虫。虫 i 永远映射到纹理固定像素、固定槽 floor(i/512)、序号 i%512。
+// 逐虫静态属性（纹理 UV、槽号、序号、种子）在构造时一次性写死；addWing 只占槽 + 写骨架像素。
 
 import * as THREE from 'three';
+import { GPUComputationRenderer } from 'three/examples/jsm/misc/GPUComputationRenderer.js';
 
 /** 逻辑蜂群需要暴露给虫海的最小接口（Orbital 结构子集） */
 export interface SwarmParent {
@@ -21,84 +22,166 @@ export interface SwarmParent {
   maxHp: number;
 }
 
+const TEX_W = 1024;
+const TEX_H = 512;                 // 1024×512 = 524288 只虫
 const SLOTS = 1024;
 const BUGS_PER_SLOT = 512;
 const FADE = 0.55;
 
 interface Slot { owner: SwarmParent | null; deathAt: number }
 
-const VERT = /* glsl */ `
+// ---- GLSL 公用片段 ----
+const HASH = /* glsl */ `
+  vec3 hash33(vec3 p) {
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxz + 33.33);
+    return fract((p.xxy + p.yxx) * p.zyx);
+  }
+  // 廉价湍流流场：漩涡感，个体游动的来源
+  vec3 flow(vec3 p, float t) {
+    vec3 q = p * 3.0;
+    return vec3(
+      sin(q.y + t) + cos(q.z - t * 0.7),
+      sin(q.z + t * 0.4) + cos(q.x + t * 0.9),
+      sin(q.x - t * 0.6) + cos(q.y + t * 0.5));
+  }
+`;
+
+const IDX = /* glsl */ `
+  float bugIndex() { return floor(gl_FragCoord.y) * ${TEX_W}.0 + floor(gl_FragCoord.x); }
+  vec4 skelRow(float slot, float row) {
+    return texture2D(uSkel, vec2((slot + 0.5) / ${SLOTS}.0, row));
+  }
+`;
+
+// 位置积分着色器
+const POS_SHADER = /* glsl */ `
   uniform sampler2D uSkel;
   uniform float uTime;
-  attribute vec4 aP0; // slotA, slotB, blend, rank01
-  attribute vec4 aP1; // phase, freq, amp, seed
+  uniform float uDt;
+  ${HASH}
+  ${IDX}
+  void main() {
+    vec2 uv = gl_FragCoord.xy / resolution.xy;
+    vec4 pos = texture2D(texPosition, uv);
+    vec4 vel = texture2D(texVelocity, uv);
+    float index = bugIndex();
+    float slot = floor(index / ${BUGS_PER_SLOT}.0);
+    vec4 s0 = skelRow(slot, 0.25);   // xyz=蜂群位置, w=血量比/隐藏(-1)
+    vec4 s1 = skelRow(slot, 0.75);   // x=死亡时刻, y=进场时刻
+    float state = s0.w, death = s1.x, birth = s1.y;
+
+    // 出生重置：槽首次激活/复用时，虫在蜂群附近散开显形
+    if (birth > 0.0 && pos.w != birth) {
+      vec3 off = (hash33(vec3(index, index * 0.37, index * 0.71)) - 0.5) * 0.14;
+      gl_FragColor = vec4(s0.xyz + off, birth);
+      return;
+    }
+    // 未激活/已回收：冻结
+    if (state <= 0.0 && death <= 0.0) { gl_FragColor = pos; return; }
+    // 正常积分（存活 或 death>0 的飘散尸体）
+    gl_FragColor = vec4(pos.xyz + vel.xyz * uDt, pos.w);
+  }
+`;
+
+// 速度积分着色器（受力 = 目标吸引 + 湍流 + 限速阻尼）
+const VEL_SHADER = /* glsl */ `
+  uniform sampler2D uSkel;
+  uniform float uTime;
+  uniform float uDt;
+  uniform float uSeek;
+  uniform float uTurb;
+  uniform float uMaxSpeed;
+  ${HASH}
+  ${IDX}
+  void main() {
+    vec2 uv = gl_FragCoord.xy / resolution.xy;
+    vec4 pos = texture2D(texPosition, uv);
+    vec4 vel = texture2D(texVelocity, uv);
+    float index = bugIndex();
+    float slot = floor(index / ${BUGS_PER_SLOT}.0);
+    vec4 s0 = skelRow(slot, 0.25);
+    vec4 s1 = skelRow(slot, 0.75);
+    float state = s0.w, death = s1.x, birth = s1.y;
+    vec3 wingPos = s0.xyz;
+
+    if (birth > 0.0 && pos.w != birth) {
+      gl_FragColor = vec4((hash33(vec3(index) + 7.0) - 0.5) * 0.05, 0.0);
+      return;
+    }
+    if (state <= 0.0 && death <= 0.0) { gl_FragColor = vec4(0.0); return; }
+
+    vec3 v = vel.xyz;
+    // 每只虫的稳定目标偏移 → 蜂群散成一团云，而不是收敛到一点
+    vec3 goff = hash33(vec3(index) + 3.3) - 0.5;
+    vec3 goal = wingPos + normalize(goff + 0.001) * (0.03 + fract(index * 0.013) * 0.1);
+
+    vec3 toGoal = goal - pos.xyz;
+    float d = length(toGoal);
+    vec3 seek = (d > 1e-4 ? toGoal / d : vec3(0.0)) * min(d, 0.3) * uSeek;
+    vec3 turb = flow(pos.xyz, uTime) * uTurb;
+    vec3 acc = seek + turb;
+
+    // 死亡飘散：一次向外冲量，随后惯性滑行
+    if (state <= 0.0 && death > 0.0) {
+      acc += normalize(pos.xyz - wingPos + 0.001) * 0.6;
+    }
+
+    v += acc * uDt;
+    float sp = length(v);
+    if (sp > uMaxSpeed) v *= uMaxSpeed / sp;
+    v *= 0.985; // 阻尼 = 惯性质感
+
+    gl_FragColor = vec4(v, 0.0);
+  }
+`;
+
+// 渲染顶点着色器：从纹理取位置，按速度定朝向，生死状态驱动缩放/透明
+const RENDER_VERT = /* glsl */ `
+  uniform sampler2D texPosition;
+  uniform sampler2D texVelocity;
+  uniform sampler2D uSkel;
+  uniform float uTime;
+  attribute vec2 aUv;    // 该虫在 GPGPU 纹理里的像素中心
+  attribute vec2 aMeta;  // slot, rank01
   varying float vAlpha;
 
-  vec4 skel(float slot, float row) {
+  vec4 skelRow(float slot, float row) {
     return texture2D(uSkel, vec2((slot + 0.5) / ${SLOTS}.0, row));
   }
 
   void main() {
-    vec4 A = skel(aP0.x, 0.25);
-    vec4 B = skel(aP0.y, 0.25);
-    vec4 meta = skel(aP0.x, 0.75); // x = 死亡时刻, y = 进场时刻
-    float ph = aP1.x, fr = aP1.y, am = aP1.z, seed = aP1.w;
+    vec3 pos = texture2D(texPosition, aUv).xyz;
+    vec3 vel = texture2D(texVelocity, aUv).xyz;
+    float slot = aMeta.x, rank01 = aMeta.y;
+    vec4 s0 = skelRow(slot, 0.25);
+    vec4 s1 = skelRow(slot, 0.75);
+    float state = s0.w, death = s1.x, birth = s1.y;
 
-    // 骨架插值（B 不可用时收拢回 A）
-    vec3 anchorB = B.w > 0.0 ? B.xyz : A.xyz;
-    vec3 base = mix(A.xyz, anchorB, aP0.z);
-    // 静态体积偏移：把骨架线段膨胀成雪茄状云柱（核心密、外围疏），云柱交叠成海
-    vec3 offDir = normalize(vec3(sin(seed * 7.13), sin(seed * 3.71 + 1.7), cos(seed * 5.39)));
-    float offMag = fract(seed * 0.731);
-    base += offDir * (offMag * offMag * 0.13);
-    // 有机摆动
-    base += vec3(
-      sin(uTime * fr + ph),
-      sin(uTime * fr * 0.83 + ph * 2.1),
-      cos(uTime * fr * 1.19 + ph)) * am;
-
-    float scale = 1.0;
-    vAlpha = 0.95;
-    float state = A.w; // <0 隐藏（未进场）, 0 空/已亡, >0 血量比
+    float scale = 1.0; vAlpha = 0.95;
     if (state <= 0.0) {
-      if (meta.x > 0.0) {
-        // 死亡碎裂：向外飘散、缩小、淡出
-        float k = clamp(1.0 - (uTime - meta.x) / ${FADE}, 0.0, 1.0);
-        scale = k;
-        vAlpha = k * 0.95;
-        base += offDir * (1.0 - k) * 0.07;
-      } else {
-        scale = 0.0;
-      }
+      if (death > 0.0) { float k = clamp(1.0 - (uTime - death) / ${FADE}, 0.0, 1.0); scale = k; vAlpha = k * 0.95; }
+      else scale = 0.0;
     } else {
-      // 血量侵蚀带：接近减员阈值的虫平滑缩小、外飘、淡出——
-      // 激光/炮火扫过虫云时边缘连续剥落，而不是成片瞬灭
-      float erode = clamp((state - aP0.w) / 0.08, 0.0, 1.0);
-      scale *= erode;
-      vAlpha *= erode;
-      base += offDir * (1.0 - erode) * 0.035;
-      // 出生显形：穿梭进场——从零放大、由内向外涌出，杜绝凭空出现
-      if (meta.y > 0.0) {
-        float grow = clamp((uTime - meta.y) / 1.2, 0.0, 1.0);
-        grow = grow * grow * (3.0 - 2.0 * grow);
-        scale *= grow;
-        vAlpha *= grow;
-        base -= offDir * (1.0 - grow) * 0.06;
-      }
+      // 血量侵蚀带：边缘逐只剥落
+      float erode = clamp((state - rank01) / 0.08, 0.0, 1.0);
+      scale *= erode; vAlpha *= erode;
+      // 出生显形
+      if (birth > 0.0) { float g = clamp((uTime - birth) / 1.0, 0.0, 1.0); g = g * g * (3.0 - 2.0 * g); scale *= g; vAlpha *= g; }
     }
 
-    // 缓慢一致的翻滚
-    float c1 = cos(uTime * 0.9 + ph * 0.3), s1 = sin(uTime * 0.9 + ph * 0.3);
-    vec3 p = position * scale;
-    p = vec3(c1 * p.x + s1 * p.z, p.y, -s1 * p.x + c1 * p.z);
-    float c2 = cos(uTime * 0.7 + ph * 0.5), s2 = sin(uTime * 0.7 + ph * 0.5);
-    p = vec3(p.x, c2 * p.y - s2 * p.z, s2 * p.y + c2 * p.z);
-
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(base + p, 1.0);
+    // 按速度朝向蝶形体（真实航向，tip = +z）
+    vec3 fwd = length(vel) > 1e-4 ? normalize(vel) : vec3(0.0, 0.0, 1.0);
+    vec3 up = abs(fwd.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 right = normalize(cross(up, fwd));
+    up = cross(fwd, right);
+    vec3 lp = position * scale;
+    vec3 world = pos + right * lp.x + up * lp.y + fwd * lp.z;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
   }
 `;
 
-const FRAG = /* glsl */ `
+const RENDER_FRAG = /* glsl */ `
   uniform vec3 uColor;
   varying float vAlpha;
   void main() {
@@ -108,48 +191,74 @@ const FRAG = /* glsl */ `
 `;
 
 export class SwarmSea {
-  private tex: THREE.DataTexture;
-  private texData: Float32Array<ArrayBuffer>;
+  private gpu: GPUComputationRenderer;
+  private posVar: any;
+  private velVar: any;
+  private skelTex: THREE.DataTexture;
+  private skelData: Float32Array<ArrayBuffer>;
   private geo: THREE.InstancedBufferGeometry;
-  private aP0: THREE.InstancedBufferAttribute;
-  private aP1: THREE.InstancedBufferAttribute;
   private mat: THREE.ShaderMaterial;
   private slots: Slot[] = [];
   private freeSlots: number[] = [];
   private slotOf = new Map<SwarmParent, number>();
-  private attrsDirty = false;
   private activeCount = 0;
 
-  constructor(parent: THREE.Object3D) {
-    // 骨架纹理：行0 = 位置+状态，行1 = 死亡时刻
-    this.texData = new Float32Array(new ArrayBuffer(SLOTS * 2 * 4 * 4));
-    this.tex = new THREE.DataTexture(this.texData, SLOTS, 2, THREE.RGBAFormat, THREE.FloatType);
-    this.tex.magFilter = THREE.NearestFilter;
-    this.tex.minFilter = THREE.NearestFilter;
-    this.tex.needsUpdate = true;
+  constructor(parent: THREE.Object3D, renderer: THREE.WebGLRenderer) {
+    // ---- 骨架纹理（CPU 每帧写，与虫数无关）----
+    this.skelData = new Float32Array(new ArrayBuffer(SLOTS * 2 * 4 * 4));
+    this.skelTex = new THREE.DataTexture(this.skelData, SLOTS, 2, THREE.RGBAFormat, THREE.FloatType);
+    this.skelTex.magFilter = THREE.NearestFilter;
+    this.skelTex.minFilter = THREE.NearestFilter;
+    this.skelTex.needsUpdate = true;
 
-    // 蝶形体：两个互相垂直的三角形，任意角度都有立体感（每只 6 条边）
+    // ---- GPGPU 位置/速度双纹理 ----
+    this.gpu = new GPUComputationRenderer(TEX_W, TEX_H, renderer);
+    this.gpu.setDataType(THREE.FloatType);
+    const pos0 = this.gpu.createTexture();
+    const vel0 = this.gpu.createTexture();
+    this.posVar = this.gpu.addVariable('texPosition', POS_SHADER, pos0);
+    this.velVar = this.gpu.addVariable('texVelocity', VEL_SHADER, vel0);
+    this.gpu.setVariableDependencies(this.posVar, [this.posVar, this.velVar]);
+    this.gpu.setVariableDependencies(this.velVar, [this.posVar, this.velVar]);
+    for (const v of [this.posVar, this.velVar]) {
+      v.material.uniforms.uSkel = { value: this.skelTex };
+      v.material.uniforms.uTime = { value: 0 };
+      v.material.uniforms.uDt = { value: 0 };
+    }
+    this.velVar.material.uniforms.uSeek = { value: 7.0 };
+    this.velVar.material.uniforms.uTurb = { value: 0.09 };
+    this.velVar.material.uniforms.uMaxSpeed = { value: 0.42 };
+    const err = this.gpu.init();
+    if (err) console.error('[swarm] GPGPU init:', err);
+
+    // ---- 渲染实例：蝶形体（tip=+z）+ 逐虫静态属性（一次写死）----
     const body = new THREE.BufferGeometry();
     body.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-      0.01, 0, 0, -0.007, 0.008, 0, -0.007, -0.008, 0,   // 纵翼
-      0.01, 0, 0, -0.007, 0, 0.008, -0.007, 0, -0.008,   // 横翼
+      0, 0, 0.01, 0.008, 0, -0.007, -0.008, 0, -0.007,   // 横翼
+      0, 0, 0.01, 0, 0.008, -0.007, 0, -0.008, -0.007,   // 纵翼
     ]), 3));
     this.geo = new THREE.InstancedBufferGeometry();
     this.geo.setAttribute('position', body.getAttribute('position'));
-    const total = SLOTS * BUGS_PER_SLOT;
-    this.aP0 = new THREE.InstancedBufferAttribute(new Float32Array(total * 4), 4);
-    this.aP1 = new THREE.InstancedBufferAttribute(new Float32Array(total * 4), 4);
-    this.aP0.setUsage(THREE.DynamicDrawUsage);
-    this.aP1.setUsage(THREE.DynamicDrawUsage);
-    this.geo.setAttribute('aP0', this.aP0);
-    this.geo.setAttribute('aP1', this.aP1);
+    const total = TEX_W * TEX_H;
+    const aUv = new Float32Array(total * 2);
+    const aMeta = new Float32Array(total * 2);
+    for (let i = 0; i < total; i++) {
+      aUv[i * 2] = ((i % TEX_W) + 0.5) / TEX_W;
+      aUv[i * 2 + 1] = (Math.floor(i / TEX_W) + 0.5) / TEX_H;
+      aMeta[i * 2] = Math.floor(i / BUGS_PER_SLOT);
+      aMeta[i * 2 + 1] = (i % BUGS_PER_SLOT) / BUGS_PER_SLOT;
+    }
+    this.geo.setAttribute('aUv', new THREE.InstancedBufferAttribute(aUv, 2));
+    this.geo.setAttribute('aMeta', new THREE.InstancedBufferAttribute(aMeta, 2));
     this.geo.instanceCount = 0;
 
     this.mat = new THREE.ShaderMaterial({
-      vertexShader: VERT,
-      fragmentShader: FRAG,
+      vertexShader: RENDER_VERT,
+      fragmentShader: RENDER_FRAG,
       uniforms: {
-        uSkel: { value: this.tex },
+        texPosition: { value: null },
+        texVelocity: { value: null },
+        uSkel: { value: this.skelTex },
         uTime: { value: 0 },
         uColor: { value: new THREE.Color('#f43f5e') },
       },
@@ -169,38 +278,20 @@ export class SwarmSea {
     }
   }
 
-  /** 注册一个逻辑蜂群：占一个骨架槽，重写它拥有的 512 只虫的静态属性 */
-  addWing(w: SwarmParent, buddy: SwarmParent | null) {
+  /** 注册一个逻辑蜂群：占一个骨架槽（buddy 参数保留兼容，GPGPU 下不再需要） */
+  addWing(w: SwarmParent, _buddy: SwarmParent | null) {
     const slot = this.freeSlots.pop();
     if (slot === undefined) return; // 槽满：静默降级
     this.slots[slot] = { owner: w, deathAt: 0 };
     this.slotOf.set(w, slot);
-    const buddySlot = buddy ? (this.slotOf.get(buddy) ?? slot) : slot;
-
-    const p0 = this.aP0.array as Float32Array;
-    const p1 = this.aP1.array as Float32Array;
-    const base = slot * BUGS_PER_SLOT;
-    for (let k = 0; k < BUGS_PER_SLOT; k++) {
-      const o = (base + k) * 4;
-      p0[o] = slot;
-      p0[o + 1] = buddySlot;
-      p0[o + 2] = -0.2 + Math.random() * 1.4; // 插值比略越界：海面边缘的绒毛
-      p0[o + 3] = k / BUGS_PER_SLOT;          // 减员序号
-      p1[o] = Math.random() * Math.PI * 2;
-      p1[o + 1] = 0.7 + Math.random() * 0.9;  // 摆动频率
-      p1[o + 2] = 0.005 + Math.random() * 0.011; // 摆动幅度
-      p1[o + 3] = Math.random() * 100;        // 体积偏移种子
-    }
-    // 初始隐藏（未进场）
     const t = slot * 4;
-    this.texData[t + 3] = -1;
-    this.texData[SLOTS * 4 + t] = 0;     // 死亡时刻
-    this.texData[SLOTS * 4 + t + 1] = 0; // 进场时刻
-    this.attrsDirty = true;
+    this.skelData[t + 3] = -1;            // state 隐藏
+    this.skelData[SLOTS * 4 + t] = 0;     // 死亡时刻
+    this.skelData[SLOTS * 4 + t + 1] = 0; // 进场时刻
   }
 
-  /** 每帧：同步骨架状态到纹理（CPU 成本与虫数无关，只与骨架数有关） */
-  render(_dt: number, time: number) {
+  /** 每帧：同步骨架 → 纹理，跑 GPGPU 积分，更新渲染 uniform。dt = 模拟步长（含倍速）。 */
+  render(dt: number, time: number) {
     let maxSlot = -1;
     for (let s = 0; s < SLOTS; s++) {
       const slot = this.slots[s];
@@ -208,46 +299,49 @@ export class SwarmSea {
       const mt = SLOTS * 4 + t;
       if (!slot.owner) {
         if (slot.deathAt > 0 && time > slot.deathAt + FADE + 0.1) {
-          // 碎裂动画播完才回收槽位，避免复用打断淡出
           slot.deathAt = 0;
-          this.texData[mt] = 0;
-          this.texData[mt + 1] = 0; // 清除进场时刻
+          this.skelData[mt] = 0;
+          this.skelData[mt + 1] = 0;
           this.freeSlots.push(s);
         }
-        if (slot.deathAt > 0) maxSlot = s; // 淡出中仍需渲染
+        if (slot.deathAt > 0) maxSlot = s;
         continue;
       }
       const w = slot.owner;
       if (!w.alive || w.phase === 'done') {
-        // 死亡：写入死亡时刻，着色器播放碎裂
         slot.deathAt = time;
-        this.texData[t + 3] = 0;
-        this.texData[mt] = time;
+        this.skelData[t + 3] = 0;
+        this.skelData[mt] = time;
         this.slotOf.delete(w);
         slot.owner = null;
         maxSlot = s;
         continue;
       }
       const p = w.group.position;
-      this.texData[t] = p.x;
-      this.texData[t + 1] = p.y;
-      this.texData[t + 2] = p.z;
-      this.texData[t + 3] = w.group.visible ? Math.max(0.02, w.hp / w.maxHp) : -1;
-      // 记录进场时刻（首次可见），驱动着色器的穿梭显形
-      if (w.group.visible && this.texData[mt + 1] === 0) this.texData[mt + 1] = time;
+      this.skelData[t] = p.x;
+      this.skelData[t + 1] = p.y;
+      this.skelData[t + 2] = p.z;
+      this.skelData[t + 3] = w.group.visible ? Math.max(0.02, w.hp / w.maxHp) : -1;
+      if (w.group.visible && this.skelData[mt + 1] === 0) this.skelData[mt + 1] = time;
       maxSlot = s;
     }
-    this.tex.needsUpdate = true;
+    this.skelTex.needsUpdate = true;
+
+    // GPGPU 积分（每帧一次，与倍速子步解耦；dt 已含倍速）
+    const simDt = Math.min(0.05, Math.max(0, dt));
+    for (const v of [this.posVar, this.velVar]) {
+      v.material.uniforms.uTime.value = time;
+      v.material.uniforms.uDt.value = simDt;
+    }
+    this.gpu.compute();
+
+    this.mat.uniforms.texPosition.value = this.gpu.getCurrentRenderTarget(this.posVar).texture;
+    this.mat.uniforms.texVelocity.value = this.gpu.getCurrentRenderTarget(this.velVar).texture;
+    this.mat.uniforms.uTime.value = time;
+
     this.geo.instanceCount = (maxSlot + 1) * BUGS_PER_SLOT;
     this.activeCount = this.geo.instanceCount;
-    if (this.attrsDirty) {
-      this.aP0.needsUpdate = true;
-      this.aP1.needsUpdate = true;
-      this.attrsDirty = false;
-    }
-    this.mat.uniforms.uTime.value = time;
   }
 
-  /** 当前提交渲染的实例数（调试用） */
   count(): number { return this.activeCount; }
 }

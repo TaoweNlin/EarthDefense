@@ -241,6 +241,7 @@ export class Game {
     private grid: GoldbergGrid,
     private cfg: LevelCfg,
     private onEnd: (win: boolean, stats: GameStats) => void,
+    private renderer: THREE.WebGLRenderer,
   ) {
     this.energy = cfg.startEnergy;
     earthGroup.add(this.root);
@@ -256,7 +257,7 @@ export class Game {
       behemoth: new InstancePool(this.root, new THREE.DodecahedronGeometry(D.behemoth.size, 0), '#e0244e', 48),
       shrieker: new InstancePool(this.root, new THREE.ConeGeometry(D.shrieker.size * 0.8, D.shrieker.size * 2.4, 5), '#ff4d7d', 128),
     };
-    this.swarm = new SwarmSea(this.root);
+    this.swarm = new SwarmSea(this.root, this.renderer);
     this.spawnCities();
     this.updateHud();
     this.setWaveLabel();
@@ -272,9 +273,13 @@ export class Game {
     }
     for (const k in this.unitPools) this.unitPools[k].end();
 
-    // 虫海：视觉层解耦渲染（骨架插值连续体）
-    this.swarm.render(dt, t);
+    // 虫海：GPGPU 个体积分。传真实模拟步长（this.time 已被倍速子步推进），
+    // 与传入的帧 dt 解耦，保证任何倍速下虫子跟随一致。
+    const simDt = t - this._lastSwarmT;
+    this._lastSwarmT = t;
+    this.swarm.render(simDt, t);
   }
+  private _lastSwarmT = 0;
 
   /** 由主菜单/自动开始调用，正式进入布防倒计时 */
   start() {
