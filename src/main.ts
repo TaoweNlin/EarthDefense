@@ -4,16 +4,32 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { buildGoldberg, type Cell } from './goldberg';
 import { Game, TOWER_DEFS, type GameStats } from './game';
-import { LEVELS, ENDLESS_LEVEL, loadProgress, saveProgress, getSession, setSession } from './levels';
+import {
+  LEVELS, ENDLESS_LEVEL, loadProgress, saveProgress, getSession, setSession,
+  DIFF_PRESETS, SWARM_PRESETS, loadEndlessCfg, saveEndlessCfg, buildEndlessTuning,
+  type EndlessDiff, type EndlessSwarm,
+} from './levels';
 import { sfx } from './sound';
 
 // ---------- 关卡会话 ----------
 const progress = loadProgress();
+// 开发者后门：?unlock=all 解锁全部关卡（写入存档后建议去掉参数刷新）
+if (new URLSearchParams(location.search).get('unlock') === 'all') {
+  progress.unlocked = LEVELS.length;
+  saveProgress(progress);
+}
 const session = getSession();
 const isEndless = session.level === ENDLESS_LEVEL.id;
 const levelId = isEndless ? ENDLESS_LEVEL.id
   : Math.min(Math.max(1, session.level), progress.unlocked, LEVELS.length);
-const level = isEndless ? ENDLESS_LEVEL : LEVELS[levelId - 1];
+const endlessCfg = loadEndlessCfg();
+const level = isEndless
+  ? {
+    ...ENDLESS_LEVEL,
+    tuning: buildEndlessTuning(endlessCfg),
+    startEnergy: ENDLESS_LEVEL.startEnergy + buildEndlessTuning(endlessCfg).energyAdd,
+  }
+  : LEVELS[levelId - 1];
 
 // ---------- 常量 ----------
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -404,24 +420,39 @@ const TUTORIAL_STEPS = [
   const menu = document.getElementById('menu')!;
   const gridEl = document.getElementById('level-grid')!;
   const flavorEl = document.getElementById('menu-flavor')!;
-  for (const lv of LEVELS) {
-    const locked = lv.id > progress.unlocked;
-    const stars = progress.stars[lv.id] ?? 0;
-    const card = document.createElement('div');
-    card.className = 'lv-card' + (locked ? ' locked' : '');
-    card.innerHTML = `
-      <div class="lv-num">MISSION ${String(lv.id).padStart(2, '0')}${locked ? ' 🔒' : ''}</div>
-      <div class="lv-name">${lv.name}</div>
-      <div class="lv-stars">${stars ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : locked ? '' : '未通关'}</div>`;
-    card.addEventListener('mouseenter', () => { if (!locked) flavorEl.textContent = lv.flavor; });
-    card.addEventListener('click', () => {
-      if (locked) { sfx.play('deny'); return; }
-      sfx.play('click');
-      setSession(lv.id, true);
-      location.reload();
-    });
-    gridEl.appendChild(card);
+
+  function renderChapter(ch: number) {
+    gridEl.innerHTML = '';
+    for (const lv of LEVELS) {
+      if (lv.chapter !== ch) continue;
+      const locked = lv.id > progress.unlocked;
+      const stars = progress.stars[lv.id] ?? 0;
+      const card = document.createElement('div');
+      card.className = 'lv-card' + (locked ? ' locked' : '');
+      card.innerHTML = `
+        <div class="lv-num">MISSION ${String(lv.id).padStart(2, '0')}${locked ? ' 🔒' : ''}</div>
+        <div class="lv-name">${lv.name}</div>
+        <div class="lv-stars">${stars ? '★'.repeat(stars) + '☆'.repeat(3 - stars) : locked ? '' : '未通关'}</div>`;
+      card.addEventListener('mouseenter', () => { if (!locked) flavorEl.textContent = lv.flavor; });
+      card.addEventListener('click', () => {
+        if (locked) { sfx.play('deny'); return; }
+        sfx.play('click');
+        setSession(lv.id, true);
+        location.reload();
+      });
+      gridEl.appendChild(card);
+    }
   }
+  const tabs = document.querySelectorAll<HTMLElement>('.ch-tab');
+  tabs.forEach((tab) => tab.addEventListener('click', () => {
+    sfx.play('click');
+    tabs.forEach((t) => t.classList.toggle('active', t === tab));
+    renderChapter(Number(tab.dataset.ch));
+  }));
+  // 默认展示进度所在的章节
+  const curCh = !isEndless && level.chapter === 2 ? 2 : (progress.unlocked > 8 ? 2 : 1);
+  tabs.forEach((t) => t.classList.toggle('active', Number(t.dataset.ch) === curCh));
+  renderChapter(curCh);
   document.getElementById('menu-start')!.addEventListener('click', () => {
     sfx.play('click');
     if (levelId === progress.unlocked && !session.autostart && !isEndless) {
@@ -433,18 +464,46 @@ const TUTORIAL_STEPS = [
       location.reload();
     }
   });
-  // 无尽模式入口
+  // 无尽模式入口：先展开开局设置（难度 × 虫潮规模），出击才开战
   document.getElementById('endless-best')!.textContent =
     progress.endlessBest > 0 ? `· 最佳 ${progress.endlessBest} 波` : '';
+  const ecPanel = document.getElementById('endless-cfg')!;
+  const ecDesc = document.getElementById('ec-desc')!;
+  const ecSel = { ...endlessCfg };
+
+  function renderEcOpts() {
+    const diffEl = document.getElementById('ec-diff')!;
+    const swarmEl = document.getElementById('ec-swarm')!;
+    diffEl.innerHTML = ''; swarmEl.innerHTML = '';
+    (Object.keys(DIFF_PRESETS) as EndlessDiff[]).forEach((k) => {
+      const b = document.createElement('button');
+      b.className = 'ec-opt' + (ecSel.diff === k ? ' sel' : '');
+      b.textContent = DIFF_PRESETS[k].label;
+      b.addEventListener('click', () => { sfx.play('click'); ecSel.diff = k; renderEcOpts(); });
+      b.addEventListener('mouseenter', () => { ecDesc.textContent = DIFF_PRESETS[k].desc; });
+      diffEl.appendChild(b);
+    });
+    (Object.keys(SWARM_PRESETS) as EndlessSwarm[]).forEach((k) => {
+      const b = document.createElement('button');
+      b.className = 'ec-opt' + (ecSel.swarm === k ? ' sel' : '');
+      b.textContent = SWARM_PRESETS[k].label;
+      b.addEventListener('click', () => { sfx.play('click'); ecSel.swarm = k; renderEcOpts(); });
+      b.addEventListener('mouseenter', () => { ecDesc.textContent = SWARM_PRESETS[k].desc; });
+      swarmEl.appendChild(b);
+    });
+    ecDesc.textContent = `${DIFF_PRESETS[ecSel.diff].desc} · ${SWARM_PRESETS[ecSel.swarm].desc}`;
+  }
+  renderEcOpts();
+
   document.getElementById('menu-endless')!.addEventListener('click', () => {
     sfx.play('click');
-    if (isEndless && !session.autostart) {
-      menu.classList.remove('show');
-      startBattle();
-    } else {
-      setSession(ENDLESS_LEVEL.id, true);
-      location.reload();
-    }
+    ecPanel.classList.toggle('show');
+  });
+  document.getElementById('ec-start')!.addEventListener('click', () => {
+    sfx.play('click');
+    saveEndlessCfg(ecSel);
+    setSession(ENDLESS_LEVEL.id, true);
+    location.reload();
   });
   if (session.autostart) {
     setSession(levelId, false); // 消费一次性自动开始标记
@@ -559,7 +618,7 @@ function selectDef(key: string | null) {
 }
 
 window.addEventListener('keydown', (e) => {
-  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7'].indexOf(e.code);
+  const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(e.code);
   if (idx >= 0 && idx < TOWER_DEFS.length && level.towers.includes(TOWER_DEFS[idx].key)) {
     selectDef(selectedDef === TOWER_DEFS[idx].key ? null : TOWER_DEFS[idx].key);
   }
@@ -633,10 +692,12 @@ function refreshTowerPanel() {
   const dmg = Math.round(game.towerDamage(tower));
   const range = game.towerRange(tower).toFixed(2);
   const perkLine = tower.perk ? `<br><span style="color:var(--amber)">◆ ${tower.perk.name}</span>` : '';
+  const hpColor = tower.hp < tower.maxHp * 0.4 ? 'var(--rose)' : 'var(--cyan)';
+  const hpLine = `<br>结构 <b style="color:${hpColor}">${Math.ceil(tower.hp)}/${tower.maxHp}</b>`;
   document.getElementById('tw-stats')!.innerHTML =
     (tower.def.damage > 0
       ? `伤害 <b>${dmg}</b> · 射程 <b>${range}</b><br>${tower.def.desc}`
-      : `射程 <b>${range}</b><br>${tower.def.desc}`) + perkLine;
+      : `射程 <b>${range}</b><br>${tower.def.desc}`) + hpLine + perkLine;
   const upBtn = document.getElementById('tw-upgrade') as HTMLButtonElement;
   const maxed = tower.level >= 3;
   upBtn.disabled = maxed || game.energy < game.upgradeCost(tower);
@@ -793,17 +854,64 @@ window.addEventListener('pointermove', (e) => {
   orbitCamera(-dx * k, dy * k);
   velYaw = -dx * k; velPitch = dy * k;
 });
+// 视角模式：orbit = 环绕俯瞰；horizon = 贴地仰视（拉近到底后继续滚轮进入）
+let viewMode: 'orbit' | 'horizon' = 'orbit';
+const horizonDir = new THREE.Vector3(0, 0, 1); // 地表立足点方向
+let hYaw = 0;
+let hPitch = 0.5; // 仰角
+
 renderer.domElement.addEventListener('wheel', (e) => {
   e.preventDefault();
-  camDistTarget = THREE.MathUtils.clamp(camDistTarget * (1 + Math.sign(e.deltaY) * 0.12), 1.7, 4.6);
+  if (viewMode === 'horizon') {
+    // 地表视角里滚轮缩小 = 返回轨道视角
+    if (Math.sign(e.deltaY) > 0) {
+      viewMode = 'orbit';
+      camDistTarget = 2.2;
+      camera.up.set(0, 1, 0);
+    }
+    return;
+  }
+  const zoomIn = Math.sign(e.deltaY) < 0;
+  if (zoomIn && camDistTarget <= 1.72) {
+    // 已在最近距离仍继续放大 → 切入地表仰视
+    viewMode = 'horizon';
+    horizonDir.copy(camera.position).normalize();
+    hYaw = 0;
+    hPitch = 0.22; // 默认贴着地平线，能同时看到地表与天幕
+    return;
+  }
+  camDistTarget = THREE.MathUtils.clamp(camDistTarget * (1 + Math.sign(e.deltaY) * 0.12), 1.7, 7.5);
 }, { passive: false });
 
 function orbitCamera(dYaw: number, dPitch: number) {
+  if (viewMode === 'horizon') {
+    hYaw += dYaw * 1.6;
+    hPitch = THREE.MathUtils.clamp(hPitch - dPitch * 1.6, 0.05, 1.5);
+    return;
+  }
   camYaw += dYaw;
   camPitch = THREE.MathUtils.clamp(camPitch + dPitch, -PITCH_LIMIT, PITCH_LIMIT);
 }
 
+const _hE1 = new THREE.Vector3();
+const _hE2 = new THREE.Vector3();
+const _hLook = new THREE.Vector3();
+
 function updateCamera() {
+  if (viewMode === 'horizon') {
+    // 贴地仰视：站在地表，看地平线与压过头顶的虫群
+    const n = horizonDir;
+    const ref = Math.abs(n.y) < 0.95 ? camera.up.set(0, 1, 0) : camera.up.set(1, 0, 0);
+    _hE1.crossVectors(n, ref).normalize();
+    _hE2.crossVectors(n, _hE1).normalize();
+    camera.position.copy(n).multiplyScalar(1.045);
+    _hLook.copy(_hE1).multiplyScalar(Math.cos(hYaw) * Math.cos(hPitch))
+      .addScaledVector(_hE2, Math.sin(hYaw) * Math.cos(hPitch))
+      .addScaledVector(n, Math.sin(hPitch));
+    camera.up.copy(n);
+    camera.lookAt(_hLook.add(camera.position));
+    return;
+  }
   const cp = Math.cos(camPitch), sp = Math.sin(camPitch);
   camera.position.set(
     Math.sin(camYaw) * cp * camDist,
@@ -879,6 +987,7 @@ function tick() {
   } else {
     game.update(0);
   }
+  game.renderInstances(dt); // 实例缓冲每帧只写一次（与子步数无关）
   mm.update();
   updateTutorial(dt);
 

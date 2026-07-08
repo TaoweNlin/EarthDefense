@@ -93,10 +93,41 @@
     /* ===== 底部中：建造栏 ===== */
     #hud-build {
       bottom: 36px; left: 50%; transform: translateX(-50%);
-      display: flex; gap: 14px; align-items: flex-end; pointer-events: auto;
+      display: flex; gap: 10px; align-items: flex-end; pointer-events: auto;
+    }
+
+    /* ===== 飞船潮 ===== */
+    #tide-clock { color: rgba(244, 63, 94, 0.7); }
+    #tide-clock.soon { color: var(--rose); text-shadow: 0 0 10px rgba(244, 63, 94, 0.6); }
+    #tide-flash {
+      position: fixed; inset: 0; z-index: 8; pointer-events: none; opacity: 0;
+      background: radial-gradient(ellipse at center, transparent 40%, rgba(244, 63, 94, 0.28));
+    }
+    #tide-flash.go { animation: tideFlash 3.2s ease-out; }
+    @keyframes tideFlash {
+      0% { opacity: 0; }
+      12% { opacity: 1; }
+      30% { opacity: 0.35; }
+      45% { opacity: 0.85; }
+      100% { opacity: 0; }
+    }
+
+    /* ===== 连杀计数 ===== */
+    #streak {
+      position: fixed; right: 64px; top: 40%; z-index: 11;
+      font-size: 36px; color: var(--amber); text-align: right;
+      letter-spacing: 2px; pointer-events: none;
+      text-shadow: 0 0 20px rgba(251, 191, 36, 0.75);
+      opacity: 0; transition: opacity 0.25s;
+      transform-origin: right center;
+    }
+    #streak.show { opacity: 1; }
+    #streak .lab {
+      display: block; font-size: 11px; letter-spacing: 5px;
+      color: rgba(251, 191, 36, 0.6); margin-bottom: 2px;
     }
     .tower-card {
-      width: 148px; padding: 12px 16px; cursor: pointer;
+      width: 122px; padding: 10px 12px; cursor: pointer;
       transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
     }
     .tower-card:hover { transform: translateY(-2px); }
@@ -224,6 +255,16 @@
     }
     #menu-sub { margin-top: 12px; font-size: 13px; letter-spacing: 8px; color: var(--cyan-dim); }
     #menu-flavor { margin-top: 30px; font-size: 12px; letter-spacing: 3px; color: rgba(251, 191, 36, 0.75); min-height: 18px; }
+    #chapter-tabs { margin-top: 20px; display: flex; gap: 12px; }
+    .ch-tab {
+      padding: 8px 22px; cursor: pointer; font-family: inherit;
+      font-size: 12px; letter-spacing: 4px; color: var(--cyan-dim);
+      background: transparent; border: 1px solid var(--cyan-faint);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      transition: all 0.15s;
+    }
+    .ch-tab:hover { color: var(--cyan); }
+    .ch-tab.active { color: var(--amber); border-color: rgba(251, 191, 36, 0.5); box-shadow: 0 0 12px rgba(251, 191, 36, 0.2); }
     #level-grid {
       margin-top: 22px; display: grid; grid-template-columns: repeat(4, 148px); gap: 12px;
     }
@@ -240,6 +281,29 @@
     .lv-name { font-size: 15px; letter-spacing: 3px; margin-top: 4px; }
     .lv-stars { font-size: 11px; margin-top: 5px; color: var(--amber); letter-spacing: 3px; min-height: 14px; }
     #endless-best { color: var(--amber); font-size: 11px; }
+
+    /* ===== 无尽模式开局设置 ===== */
+    #endless-cfg {
+      display: none; margin-top: 22px; padding: 18px 22px;
+      background: var(--panel-bg); border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+      text-align: left; min-width: 480px;
+    }
+    #endless-cfg.show { display: block; }
+    .ec-row { margin-bottom: 14px; }
+    .ec-label { font-size: 11px; letter-spacing: 3px; color: var(--cyan-dim); margin-bottom: 8px; }
+    .ec-opts { display: flex; gap: 10px; }
+    .ec-opt {
+      flex: 1; padding: 9px 12px; cursor: pointer; font-family: inherit; text-align: center;
+      font-size: 13px; letter-spacing: 2px; color: var(--cyan-dim);
+      background: transparent; border: 1px solid var(--cyan-faint);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      transition: all 0.15s;
+    }
+    .ec-opt:hover { color: var(--cyan); }
+    .ec-opt.sel { color: var(--amber); border-color: rgba(251, 191, 36, 0.55); box-shadow: 0 0 10px rgba(251, 191, 36, 0.2); }
+    #ec-desc { font-size: 11px; letter-spacing: 1px; color: rgba(251, 191, 36, 0.7); min-height: 15px; margin-bottom: 14px; }
+    #ec-start { width: 100%; }
 
     /* ===== 教学提示 ===== */
     #tutorial {
@@ -338,6 +402,7 @@
     <div class="panel res-box">
       <div class="p-label">波次 WAVE</div>
       <div class="res-val" id="wave-val">—</div>
+      <div class="res-sub" id="tide-clock"></div>
     </div>
   </div>
 
@@ -393,18 +458,36 @@
     <div id="menu-title">寰宇防线</div>
     <div id="menu-sub">EARTH DEFENSE // ORBITAL COMMAND</div>
     <div id="menu-flavor"></div>
+    <div id="chapter-tabs">
+      <button class="ch-tab active" data-ch="1">章节一 · 抵抗篇</button>
+      <button class="ch-tab" data-ch="2">章节二 · 怪潮篇</button>
+    </div>
     <div id="level-grid"></div>
     <div style="display:flex; gap:14px; margin-top:34px;">
       <button class="big-btn primary" id="menu-start">开始作战 // ENGAGE</button>
       <button class="big-btn" id="menu-endless">无尽模式 <span id="endless-best"></span></button>
+    </div>
+    <div id="endless-cfg">
+      <div class="ec-row">
+        <div class="ec-label">难度 DIFFICULTY</div>
+        <div class="ec-opts" id="ec-diff"></div>
+      </div>
+      <div class="ec-row">
+        <div class="ec-label">虫潮规模 SWARM SCALE</div>
+        <div class="ec-opts" id="ec-swarm"></div>
+      </div>
+      <div id="ec-desc"></div>
+      <button class="big-btn primary" id="ec-start">出击 // LAUNCH</button>
     </div>
   </div>
 
   <div id="tutorial"></div>
   <button id="mute-btn" title="[M] 静音">♪</button>
   <button id="speed-btn" title="[F] 倍速">1×</button>
+  <div id="streak"></div>
+  <div id="tide-flash"></div>
 
-  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放 · [1-7] 选塔 · 点塔查看/升级 · [空格] 暂停 · [F] 倍速</div>
+  <div class="hud" id="hud-bottom">拖拽旋转 · 滚轮缩放（拉近到底再滚 = 地表仰视） · [1-9] 选塔 · [空格] 暂停 · [F] 倍速</div>
 
   <div class="corner" id="c-tl"></div>
   <div class="corner" id="c-tr"></div>
