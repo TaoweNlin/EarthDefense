@@ -28,7 +28,7 @@ const SLOTS = 1024;
 const BUGS_PER_SLOT = 512;
 const FADE = 0.55;
 
-interface Slot { owner: SwarmParent | null; deathAt: number }
+interface Slot { owner: SwarmParent | null; deathAt: number; frontId: number }
 
 // ---- GLSL 公用片段 ----
 const HASH = /* glsl */ `
@@ -47,10 +47,31 @@ const HASH = /* glsl */ `
   }
 `;
 
+// 骨架纹理 4 行：行0=蜂群位置+状态, 行1=死亡/进场时刻, 行2=目标D(城市方向), 行3=源点O(深空)
+const ROW0 = 0.125, ROW1 = 0.375, ROW2 = 0.625, ROW3 = 0.875;
 const IDX = /* glsl */ `
+  #define ROW0 0.125
+  #define ROW1 0.375
+  #define ROW2 0.625
+  #define ROW3 0.875
   float bugIndex() { return floor(gl_FragCoord.y) * ${TEX_W}.0 + floor(gl_FragCoord.x); }
   vec4 skelRow(float slot, float row) {
     return texture2D(uSkel, vec2((slot + 0.5) / ${SLOTS}.0, row));
+  }
+  // 河道坐标系：给定槽，算出源点O、目标D、流向axis、河长len、该虫的横向车道lane
+  void streamFrame(float slot, float index, out vec3 O, out vec3 D, out vec3 axis, out float len, out vec3 lane) {
+    D = skelRow(slot, ROW2).xyz;
+    O = skelRow(slot, ROW3).xyz;
+    vec3 d = D - O;
+    len = length(d);
+    axis = d / max(len, 1e-4);
+    vec3 rnd = hash33(vec3(index) + 3.3);
+    vec3 up = abs(axis.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 e1 = normalize(cross(axis, up));
+    vec3 e2 = cross(axis, e1);
+    float ang = rnd.x * 6.2831853;
+    float rad = 0.03 + rnd.y * rnd.y * 0.2; // 河道半径：细长 → 河流感（核心密边缘疏）
+    lane = (e1 * cos(ang) + e2 * sin(ang)) * rad;
   }
 `;
 
@@ -67,20 +88,29 @@ const POS_SHADER = /* glsl */ `
     vec4 vel = texture2D(texVelocity, uv);
     float index = bugIndex();
     float slot = floor(index / ${BUGS_PER_SLOT}.0);
-    vec4 s0 = skelRow(slot, 0.25);   // xyz=蜂群位置, w=血量比/隐藏(-1)
-    vec4 s1 = skelRow(slot, 0.75);   // x=死亡时刻, y=进场时刻
+    vec4 s0 = skelRow(slot, ROW0);   // xyz=蜂群位置, w=血量比/隐藏(-1)
+    vec4 s1 = skelRow(slot, ROW1);   // x=死亡时刻, y=进场时刻
     float state = s0.w, death = s1.x, birth = s1.y;
 
-    // 出生重置：槽首次激活/复用时，虫在蜂群附近散开显形
+    vec3 O, D, axis, lane; float len;
+    streamFrame(slot, index, O, D, axis, len, lane);
+
+    // 出生重置：虫沿河道从源到目标散布 → 一开场就是一条流，而非一个点
     if (birth > 0.0 && pos.w != birth) {
-      vec3 off = (hash33(vec3(index, index * 0.37, index * 0.71)) - 0.5) * 0.14;
-      gl_FragColor = vec4(s0.xyz + off, birth);
+      float u = hash33(vec3(index) + 1.7).x;
+      gl_FragColor = vec4(O + axis * (u * len) + lane, birth);
       return;
     }
     // 未激活/已回收：冻结
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = pos; return; }
-    // 正常积分（存活 或 death>0 的飘散尸体）
-    gl_FragColor = vec4(pos.xyz + vel.xyz * uDt, pos.w);
+
+    vec3 np = pos.xyz + vel.xyz * uDt;
+    // 流到终点 → 绕回源头，形成持续奔涌的河（死亡飘散的尸体不绕回）
+    if (death <= 0.0) {
+      float along = dot(np - O, axis);
+      if (along > len) np = O + lane + axis * (hash33(vec3(index) + 5.1).x * 0.15);
+    }
+    gl_FragColor = vec4(np, pos.w);
   }
 `;
 
@@ -90,6 +120,7 @@ const VEL_SHADER = /* glsl */ `
   uniform float uTime;
   uniform float uDt;
   uniform float uSeek;
+  uniform float uFlow;
   uniform float uTurb;
   uniform float uMaxSpeed;
   ${HASH}
@@ -100,37 +131,40 @@ const VEL_SHADER = /* glsl */ `
     vec4 vel = texture2D(texVelocity, uv);
     float index = bugIndex();
     float slot = floor(index / ${BUGS_PER_SLOT}.0);
-    vec4 s0 = skelRow(slot, 0.25);
-    vec4 s1 = skelRow(slot, 0.75);
+    vec4 s0 = skelRow(slot, ROW0);
+    vec4 s1 = skelRow(slot, ROW1);
     float state = s0.w, death = s1.x, birth = s1.y;
-    vec3 wingPos = s0.xyz;
+
+    vec3 O, D, axis, lane; float len;
+    streamFrame(slot, index, O, D, axis, len, lane);
 
     if (birth > 0.0 && pos.w != birth) {
-      gl_FragColor = vec4((hash33(vec3(index) + 7.0) - 0.5) * 0.05, 0.0);
+      gl_FragColor = vec4(axis * uFlow, 0.0); // 出生即带着流向的初速度
       return;
     }
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = vec4(0.0); return; }
 
     vec3 v = vel.xyz;
-    // 每只虫的稳定目标偏移 → 蜂群散成一团云，而不是收敛到一点
-    vec3 goff = hash33(vec3(index) + 3.3) - 0.5;
-    vec3 goal = wingPos + normalize(goff + 0.001) * (0.03 + fract(index * 0.013) * 0.1);
-
-    vec3 toGoal = goal - pos.xyz;
-    float d = length(toGoal);
-    vec3 seek = (d > 1e-4 ? toGoal / d : vec3(0.0)) * min(d, 0.3) * uSeek;
+    // 河道约束：拉回到"轴线上最近点 + 该虫车道"，越接近终点河道越收窄（漏斗汇入）
+    float along = clamp(dot(pos.xyz - O, axis), 0.0, len);
+    float taper = mix(1.0, 0.4, along / max(len, 1e-4));
+    vec3 laneTarget = O + axis * along + lane * taper;
+    vec3 channel = (laneTarget - pos.xyz) * uSeek;
+    // 沿河推进
+    vec3 flowF = axis * uFlow;
+    // 湍流（流场随位置相干 → 河面涟漪，而非各自乱抖）
     vec3 turb = flow(pos.xyz, uTime) * uTurb;
-    vec3 acc = seek + turb;
+    vec3 acc = channel + flowF + turb;
 
-    // 死亡飘散：一次向外冲量，随后惯性滑行
+    // 死亡飘散：一次垂直河道的外冲，随后滑行
     if (state <= 0.0 && death > 0.0) {
-      acc += normalize(pos.xyz - wingPos + 0.001) * 0.6;
+      acc += normalize(lane + 0.001) * 0.5;
     }
 
     v += acc * uDt;
     float sp = length(v);
     if (sp > uMaxSpeed) v *= uMaxSpeed / sp;
-    v *= 0.985; // 阻尼 = 惯性质感
+    v *= 0.985;
 
     gl_FragColor = vec4(v, 0.0);
   }
@@ -154,8 +188,8 @@ const RENDER_VERT = /* glsl */ `
     vec3 pos = texture2D(texPosition, aUv).xyz;
     vec3 vel = texture2D(texVelocity, aUv).xyz;
     float slot = aMeta.x, rank01 = aMeta.y;
-    vec4 s0 = skelRow(slot, 0.25);
-    vec4 s1 = skelRow(slot, 0.75);
+    vec4 s0 = skelRow(slot, 0.125);   // ROW0 位置+状态
+    vec4 s1 = skelRow(slot, 0.375);   // ROW1 死亡/进场时刻
     float state = s0.w, death = s1.x, birth = s1.y;
 
     float scale = 1.0; vAlpha = 0.95;
@@ -202,11 +236,16 @@ export class SwarmSea {
   private freeSlots: number[] = [];
   private slotOf = new Map<SwarmParent, number>();
   private activeCount = 0;
+  // render() 复用的临时结构（避免每帧分配）
+  private _fronts = new Map<number, { x: number; y: number; z: number; n: number }>();
+  private _active: number[] = [];
+  // 每个锋面的深空源点（锋面诞生时快照一次，固定不动）
+  private frontOrigin = new Map<number, { x: number; y: number; z: number }>();
 
   constructor(parent: THREE.Object3D, renderer: THREE.WebGLRenderer) {
-    // ---- 骨架纹理（CPU 每帧写，与虫数无关）----
-    this.skelData = new Float32Array(new ArrayBuffer(SLOTS * 2 * 4 * 4));
-    this.skelTex = new THREE.DataTexture(this.skelData, SLOTS, 2, THREE.RGBAFormat, THREE.FloatType);
+    // ---- 骨架纹理（CPU 每帧写，与虫数无关）：4 行 = 位置/状态 + 生死时刻 + 目标D + 源点O ----
+    this.skelData = new Float32Array(new ArrayBuffer(SLOTS * 4 * 4 * 4));
+    this.skelTex = new THREE.DataTexture(this.skelData, SLOTS, 4, THREE.RGBAFormat, THREE.FloatType);
     this.skelTex.magFilter = THREE.NearestFilter;
     this.skelTex.minFilter = THREE.NearestFilter;
     this.skelTex.needsUpdate = true;
@@ -225,9 +264,10 @@ export class SwarmSea {
       v.material.uniforms.uTime = { value: 0 };
       v.material.uniforms.uDt = { value: 0 };
     }
-    this.velVar.material.uniforms.uSeek = { value: 7.0 };
-    this.velVar.material.uniforms.uTurb = { value: 0.09 };
-    this.velVar.material.uniforms.uMaxSpeed = { value: 0.42 };
+    this.velVar.material.uniforms.uSeek = { value: 3.5 };   // 河道约束力
+    this.velVar.material.uniforms.uFlow = { value: 0.6 };   // 沿河流速
+    this.velVar.material.uniforms.uTurb = { value: 0.06 };  // 河面涟漪
+    this.velVar.material.uniforms.uMaxSpeed = { value: 1.0 };
     const err = this.gpu.init();
     if (err) console.error('[swarm] GPGPU init:', err);
 
@@ -273,16 +313,16 @@ export class SwarmSea {
     parent.add(mesh);
 
     for (let s = SLOTS - 1; s >= 0; s--) {
-      this.slots.push({ owner: null, deathAt: 0 });
+      this.slots.push({ owner: null, deathAt: 0, frontId: 0 });
       this.freeSlots.push(s);
     }
   }
 
-  /** 注册一个逻辑蜂群：占一个骨架槽（buddy 参数保留兼容，GPGPU 下不再需要） */
-  addWing(w: SwarmParent, _buddy: SwarmParent | null) {
+  /** 注册一个逻辑蜂群：占一个骨架槽。frontId 相同的蜂群会汇成同一个大群。 */
+  addWing(w: SwarmParent, frontId: number) {
     const slot = this.freeSlots.pop();
     if (slot === undefined) return; // 槽满：静默降级
-    this.slots[slot] = { owner: w, deathAt: 0 };
+    this.slots[slot] = { owner: w, deathAt: 0, frontId };
     this.slotOf.set(w, slot);
     const t = slot * 4;
     this.skelData[t + 3] = -1;            // state 隐藏
@@ -292,7 +332,10 @@ export class SwarmSea {
 
   /** 每帧：同步骨架 → 纹理，跑 GPGPU 积分，更新渲染 uniform。dt = 模拟步长（含倍速）。 */
   render(dt: number, time: number) {
+    const fronts = this._fronts; fronts.clear();
+    const active = this._active; active.length = 0;
     let maxSlot = -1;
+    // 趟 1：写各槽状态，同时累加每个锋面的质心
     for (let s = 0; s < SLOTS; s++) {
       const slot = this.slots[s];
       const t = s * 4;
@@ -324,7 +367,32 @@ export class SwarmSea {
       this.skelData[t + 3] = w.group.visible ? Math.max(0.02, w.hp / w.maxHp) : -1;
       if (w.group.visible && this.skelData[mt + 1] === 0) this.skelData[mt + 1] = time;
       maxSlot = s;
+      if (w.group.visible) {
+        let f = fronts.get(slot.frontId);
+        if (!f) { f = { x: 0, y: 0, z: 0, n: 0 }; fronts.set(slot.frontId, f); }
+        f.x += p.x; f.y += p.y; f.z += p.z; f.n++;
+        active.push(s);
+      }
     }
+    // 趟 2：写目标D(行2=质心) 与 源点O(行3=锋面诞生时的深空方向，固定)
+    const CROW = SLOTS * 2 * 4, OROW = SLOTS * 3 * 4;
+    const ORIGIN_R = 2.9;
+    for (const s of active) {
+      const fid = this.slots[s].frontId;
+      const f = fronts.get(fid)!;
+      const cx = f.x / f.n, cy = f.y / f.n, cz = f.z / f.n;
+      let o = this.frontOrigin.get(fid);
+      if (!o) {
+        const l = Math.hypot(cx, cy, cz) || 1;
+        o = { x: (cx / l) * ORIGIN_R, y: (cy / l) * ORIGIN_R, z: (cz / l) * ORIGIN_R };
+        this.frontOrigin.set(fid, o);
+      }
+      const ct = CROW + s * 4, ot = OROW + s * 4;
+      this.skelData[ct] = cx; this.skelData[ct + 1] = cy; this.skelData[ct + 2] = cz;
+      this.skelData[ot] = o.x; this.skelData[ot + 1] = o.y; this.skelData[ot + 2] = o.z;
+    }
+    // 清理已消失锋面的源点
+    for (const k of this.frontOrigin.keys()) if (!fronts.has(k)) this.frontOrigin.delete(k);
     this.skelTex.needsUpdate = true;
 
     // GPGPU 积分（每帧一次，与倍速子步解耦；dt 已含倍速）

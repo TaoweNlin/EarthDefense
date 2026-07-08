@@ -217,7 +217,8 @@ export class Game {
   satellites: Satellite[] = [];
   private unitPools!: Record<string, InstancePool>;
   private swarm!: SwarmSea;
-  private prevWing: SwarmParent | null = null; // 虫海骨架链：同批次的上一只蜂群
+  private frontSeq = 0;        // 锋面/批次自增 id：同 id 的蜂群汇成一个大群
+  private currentFront = 0;    // 当前正在生成的锋面 id
   // 连杀：短窗口内的连续击杀计数（割草反馈）
   private streak = 0;
   private streakT = 0;
@@ -1460,7 +1461,8 @@ export class Game {
     const targets = this.cities.filter((c) => c.alive);
     if (!targets.length || !this.laneCells.length) return;
     // 多个方向的海面（1~3 片），各自席卷向最近的城市
-    const fronts = count > 60 ? 3 : count > 25 ? 2 : 1;
+    // 普通波次 = 一个大群整体涌来；只有超大潮汐才分成两股夹击
+    const fronts = count > 160 ? 2 : 1;
     const per = Math.ceil(count / fronts);
     const laneStart = Math.floor(this.rand() * this.laneCells.length);
     for (let r = 0; r < fronts; r++) {
@@ -1478,7 +1480,7 @@ export class Game {
 
       const n = Math.min(per, count - r * per);
       const rollDepth = n * 0.028; // 海浪厚度：拉长倾泻时间，保证波次持续性不空场
-      this.prevWing = null; // 骨架链按锋面隔断
+      this.currentFront = ++this.frontSeq; // 每条锋面 = 一个大群
       // 虫洞裂隙：锋面中心撕开次元裂口，虫群从这一带穿梭显形
       this.spawnRift(startBase, Math.min(34, 6 + rollDepth * 22));
       for (let i = 0; i < n; i++) {
@@ -1558,8 +1560,7 @@ export class Game {
     o.group.visible = false;                   // 蜂群走虫海渲染
     this.orbitals.push(o);
     // 注册进虫海：与同批上一只蜂群构成骨架连线，视觉虫填充其间
-    this.swarm.addWing(o as SwarmParent, this.prevWing);
-    this.prevWing = o as SwarmParent;
+    this.swarm.addWing(o as SwarmParent, this.currentFront);
   }
 
   /** 虫巢母舰：远轨巨舰，周期性向星球倾泻立体虫群流，倾泻完毕后撤离 */
@@ -1729,7 +1730,7 @@ export class Game {
               const ref2 = Math.abs(cityDir2.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
               const te1 = new THREE.Vector3().crossVectors(cityDir2, ref2).normalize();
               const te2 = new THREE.Vector3().crossVectors(cityDir2, te1).normalize();
-              this.prevWing = null; // 骨架链按批次隔断
+              this.currentFront = ++this.frontSeq; // 每批虫巢喷涌 = 一个大群
               for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
                 // 出生即散开成一片：宽幕喷涌 + 目标散布城市周边
                 const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
