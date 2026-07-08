@@ -174,7 +174,7 @@ const _wSide = new THREE.Vector3();
 
 const HIVE_SQUAD_INTERVAL = 4.2; // 每批虫群间隔
 const HIVE_SQUAD_SIZE = 32;      // 每批数量
-const WING_CAP = 900;            // 全场逻辑蜂群上限（性能保险丝）
+const WING_CAP = 3600;           // 全场逻辑蜂群上限（更多小单位 → 中弹只散一小片）
 interface Orbital {
   kind: OrbitalKind; hp: number; maxHp: number; alive: boolean;
   group: THREE.Group; pos: THREE.Vector3;
@@ -1461,7 +1461,7 @@ export class Game {
     const targets = this.cities.filter((c) => c.alive);
     if (!targets.length || !this.laneCells.length) return;
     // 刷更多：整体放大虫量（受 900 逻辑蜂群上限约束）
-    count = Math.min(880, Math.round(count * 1.8));
+    count = Math.min(3200, Math.round(count * 5));
     // 普通波次 = 一个大群整体涌来；只有超大潮汐才分成两股夹击
     const fronts = count > 320 ? 2 : 1;
     const per = Math.ceil(count / fronts);

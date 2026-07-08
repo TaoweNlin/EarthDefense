@@ -23,9 +23,9 @@ export interface SwarmParent {
 }
 
 const TEX_W = 1024;
-const TEX_H = 512;                 // 1024×512 = 524288 只虫
-const SLOTS = 1024;
-const BUGS_PER_SLOT = 512;
+const TEX_H = 512;                 // 1024×512 = 524288 只虫（总容量不变）
+const SLOTS = 4096;                // 更多作战单位（每个是更小的簇 → 中弹只散一小片）
+const BUGS_PER_SLOT = 128;         // 每单位更少的虫
 const FADE = 0.55;
 
 interface Slot {
