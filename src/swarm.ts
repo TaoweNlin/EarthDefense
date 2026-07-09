@@ -20,13 +20,15 @@ export interface SwarmParent {
   phase: string;
   hp: number;
   maxHp: number;
+  hit?: { x: number; y: number; z: number }; // 最近命中点，死亡涟漪原点
 }
 
 const TEX_W = 1024;
 const TEX_H = 512;                 // 1024×512 = 524288 只虫（总容量不变）
 const SLOTS = 4096;                // 更多作战单位（每个是更小的簇 → 中弹只散一小片）
 const BUGS_PER_SLOT = 128;         // 每单位更少的虫
-const FADE = 0.55;
+const FADE = 0.5;
+const RIPPLE = 6.0;                // 死亡涟漪：每单位距离的延迟秒数（离命中点近的先死）
 
 interface Slot {
   owner: SwarmParent | null; deathAt: number; frontId: number;
@@ -134,20 +136,23 @@ const VEL_SHADER = /* glsl */ `
     if (state <= 0.0 && death <= 0.0) { gl_FragColor = vec4(0.0); return; }
 
     vec3 v = vel.xyz;
-    // 贴住蜂群：每虫一个稳定"家点"，用【弹簧+强阻尼】平滑归位——临界阻尼不振荡，杜绝原地颤抖
-    vec3 goff = (hash33(vec3(index) + 9.1) - 0.5) * 2.0;
-    vec3 goal = wingPos + goff * 0.18;
-    vec3 spring = (goal - pos.xyz) * uSeek;                  // 弹簧力（与距离成正比）
-    // 低频、空间相干的缓慢漂移（一团虫一起飘，不是相邻各自抖）
-    vec3 turb = flow(pos.xyz * 0.5, uTime * 0.4) * uTurb;
-    vec3 acc = spring + turb;
-
-    if (state <= 0.0 && death > 0.0) {
-      acc += normalize(pos.xyz - wingPos + vec3(1e-4)) * 6.0; // 死亡向外飘散
+    if (death > 0.0) {
+      // 死亡：命中点涟漪——离命中点近的先被撕出去，往外一圈圈扩散（不是整簇齐爆）
+      vec3 impact = skelRow(slot, ROW3).xyz;
+      float delay = length(pos.xyz - impact) * ${RIPPLE.toFixed(1)};
+      if (uTime - death > delay) {
+        v += normalize(pos.xyz - impact + vec3(1e-4)) * 4.0 * uDt; // 轮到它 → 向外炸散
+      }
+      v *= uDamp;
+    } else {
+      // 存活：贴住蜂群的稳定"家点"，弹簧+强阻尼平滑归位（略过阻尼，不振荡）
+      vec3 goff = (hash33(vec3(index) + 9.1) - 0.5) * 2.0;
+      vec3 goal = wingPos + goff * 0.18;
+      vec3 spring = (goal - pos.xyz) * uSeek;
+      vec3 turb = flow(pos.xyz * 0.5, uTime * 0.4) * uTurb; // 低频相干漂移
+      v += (spring + turb) * uDt;
+      v *= uDamp;
     }
-
-    v += acc * uDt;
-    v *= uDamp;          // 强阻尼 → 平滑收敛，不来回振荡
     float sp = length(v);
     if (sp > uMaxSpeed) v *= uMaxSpeed / sp;
 
@@ -179,8 +184,14 @@ const RENDER_VERT = /* glsl */ `
 
     float scale = 1.0; vAlpha = 0.95;
     if (state <= 0.0) {
-      if (death > 0.0) { float k = clamp(1.0 - (uTime - death) / ${FADE}, 0.0, 1.0); scale = k; vAlpha = k * 0.95; }
-      else scale = 0.0;
+      if (death > 0.0) {
+        // 命中点涟漪淡出：近的先熄灭，往外一圈圈死——不是整簇同时消失
+        vec3 impact = skelRow(slot, 0.875).xyz; // ROW3
+        float delay = length(pos - impact) * ${RIPPLE.toFixed(1)} + rank01 * 0.12;
+        float local = uTime - death - delay;
+        float k = local <= 0.0 ? 1.0 : clamp(1.0 - local / ${FADE}, 0.0, 1.0);
+        scale = k; vAlpha = k * 0.95;
+      } else scale = 0.0;
     } else {
       // 血量侵蚀带：边缘逐只剥落
       float erode = clamp((state - rank01) / 0.08, 0.0, 1.0);
@@ -335,6 +346,11 @@ export class SwarmSea {
         slot.deathAt = time;
         this.skelData[t + 3] = 0;
         this.skelData[mt] = time;
+        // 命中点写入 ROW3：死亡涟漪从这里向外一圈圈撕开
+        const ht = SLOTS * 3 * 4 + t;
+        const h = w.hit;
+        if (h) { this.skelData[ht] = h.x; this.skelData[ht + 1] = h.y; this.skelData[ht + 2] = h.z; }
+        else { const p = w.group.position; this.skelData[ht] = p.x; this.skelData[ht + 1] = p.y; this.skelData[ht + 2] = p.z; }
         this.slotOf.delete(w);
         slot.owner = null;
         maxSlot = s;

@@ -188,6 +188,7 @@ interface Orbital {
   heavy?: boolean;    // 重型登陆舱：厚甲、慢速、远距登陆
   wingAlt?: number;   // 蜂群个体巡航高度（1.06~1.34，形成立体云）
   swirlAmp?: number;  // 蜂群个体螺旋摆动幅度
+  hit?: THREE.Vector3; // 最近一次命中点（簇内），死亡涟漪从这里向外扩散
 }
 
 interface Fx { obj: THREE.Object3D; ttl: number; max: number; kind: 'laser' | 'ring' | 'flash' | 'beam' | 'arc' }
@@ -1880,10 +1881,32 @@ export class Game {
     if (o.marker) this.root.remove(o.marker);
   }
 
+  /** 离散射击的命中点：塔已选好目标，这里在它的虫云内随机取一点（每发不同 → 打一片而非一个点） */
+  private impactOn(o: Orbital, spread = 0.16): THREE.Vector3 {
+    if (!o.hit) o.hit = new THREE.Vector3();
+    o.hit.set(
+      o.pos.x + (this.rand() - 0.5) * spread,
+      o.pos.y + (this.rand() - 0.5) * spread,
+      o.pos.z + (this.rand() - 0.5) * spread);
+    return o.hit;
+  }
+
+  /** 激光的命中点：在虫云内平滑游走（光束扫过不同部位 → 像在虫群里犁过去） */
+  private laserImpact(o: Orbital): THREE.Vector3 {
+    if (!o.hit) o.hit = new THREE.Vector3();
+    const t = this.time * 1.9 + o.orbitAngle * 7.0;
+    o.hit.set(
+      o.pos.x + Math.sin(t) * 0.12,
+      o.pos.y + Math.sin(t * 1.31 + 1.0) * 0.12,
+      o.pos.z + Math.cos(t * 0.87) * 0.12);
+    return o.hit;
+  }
+
   damageOrbital(o: Orbital, dmg: number) {
     if (!o.alive || o.phase === 'done') return;
     o.hp -= dmg;
     if (o.hp > 0) return;
+    if (o.kind === 'wing' && !o.hit) o.hit = new THREE.Vector3().copy(o.pos); // 兜底命中点
     if (o.kind === 'transport') {
       this.stats.intercepted++;
       sfx.play('intercept', 120);
@@ -2233,8 +2256,10 @@ export class Game {
           if (wing) {
             tw.cooldown = tw.def.cooldown;
             const from = towerN.clone().multiplyScalar(towerH + 0.062);
-            this.fireLine(from, wing.pos.clone(), 0.12);
+            const ip = this.impactOn(wing);           // 落点在虫云内随机取
+            this.fireLine(from, ip.clone(), 0.12);
             this.spawnFlash(from, COL_CYAN, 0.007, 0.12);
+            this.spawnFlash(ip.clone(), COL_ROSE, 0.008, 0.13);
             sfx.play('shoot', 80);
             this.damageOrbital(wing, this.towerDamage(tw));
           }
@@ -2288,6 +2313,8 @@ export class Game {
 
     tw.lockT = Math.min(3, tw.lockT + dt);
     const ramp = 1 + (tw.lockT / 3) * 1.2; // 1 → 2.2
+    // 蜂群目标：命中点在虫云内平滑游走，光束犁过去；死亡涟漪从这里扩散
+    const aim = target.kind === 'wing' ? this.laserImpact(target) : target.pos;
     this.damageOrbital(target, this.towerDamage(tw) * ramp * rateMul * dt);
 
     // 持续体积光柱：锁定越久越粗越亮
@@ -2302,15 +2329,15 @@ export class Game {
       this.root.add(tw.beam);
     }
     const from = towerN.clone().multiplyScalar(tw.group.position.length() + 0.108);
-    const dir = target.pos.clone().sub(from);
+    const dir = aim.clone().sub(from);
     const len = dir.length();
     const radius = 0.0022 + (tw.lockT / 3) * 0.0045;
     tw.beam.position.copy(from).addScaledVector(dir, 0.5);
     tw.beam.scale.set(radius, len, radius);
     tw.beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
     (tw.beam.material as THREE.MeshBasicMaterial).opacity = 0.45 + (tw.lockT / 3) * 0.5;
-    // 命中点火花
-    if (this.rand() < dt * 8) this.spawnFlash(target.pos.clone(), COL_CYAN, 0.008 + (tw.lockT / 3) * 0.008, 0.12);
+    // 命中点火花（在虫云内游走处）
+    if (this.rand() < dt * 10) this.spawnFlash(aim.clone(), COL_CYAN, 0.008 + (tw.lockT / 3) * 0.008, 0.12);
   }
 
   private clearLock(tw: Tower) {
