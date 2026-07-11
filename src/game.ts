@@ -6,7 +6,7 @@ import type { GoldbergGrid, Cell } from './goldberg';
 import type { LevelCfg, WaveCfg } from './levels';
 import { sfx } from './sound';
 import { InstancePool } from './instances';
-import { SwarmSea, type SwarmParent } from './swarm';
+import { SwarmSea, CLUSTER_RADIUS, type SwarmParent } from './swarm';
 
 const COL_CYAN = new THREE.Color('#22d3ee');
 const COL_ROSE = new THREE.Color('#f43f5e');
@@ -171,6 +171,7 @@ const HIVE_REWARD = 130;
 const _wDir = new THREE.Vector3();
 const _wAxis = new THREE.Vector3();
 const _wSide = new THREE.Vector3();
+const _scanDir = new THREE.Vector3(); // 塔索敌扫描用（每帧 塔数×orbital数 次，clone 会打爆 GC）
 
 const HIVE_SQUAD_INTERVAL = 4.2; // 每批虫群间隔
 const HIVE_SQUAD_SIZE = 32;      // 每批数量
@@ -218,8 +219,7 @@ export class Game {
   satellites: Satellite[] = [];
   private unitPools!: Record<string, InstancePool>;
   private swarm!: SwarmSea;
-  private frontSeq = 0;        // 锋面/批次自增 id：同 id 的蜂群汇成一个大群
-  private currentFront = 0;    // 当前正在生成的锋面 id
+  private aliveWings = 0;      // 存活蜂群计数（O(1) 上限检查，替代每次生成的全数组扫描）
   // 连杀：短窗口内的连续击杀计数（割草反馈）
   private streak = 0;
   private streakT = 0;
@@ -704,10 +704,11 @@ export class Game {
       }
       if (!target) continue;
       s.cooldown = tower.def.cooldown;
-      this.fireLine(pos.clone(), target.pos.clone(), 0.12);
-      this.spawnFlash(target.pos.clone(), COL_CYAN, 0.008, 0.12);
+      const sIp = target.kind === 'wing' ? this.impactOn(target) : target.pos;
+      this.fireLine(pos.clone(), sIp.clone(), 0.12);
+      this.spawnFlash(sIp.clone(), COL_CYAN, 0.008, 0.12);
       sfx.play('shoot', 90);
-      this.damageOrbital(target, this.towerDamage(tower));
+      this.damageOrbital(target, this.towerDamage(tower), sIp);
     }
   }
 
@@ -1481,10 +1482,10 @@ export class Game {
       const e2 = new THREE.Vector3().crossVectors(startBase, e1).normalize();
 
       const n = Math.min(per, count - r * per);
-      const rollDepth = n * 0.055; // 海浪厚度：拉长倾泻时间，刷更久不空场
-      this.currentFront = ++this.frontSeq; // 每条锋面 = 一个大群
-      // 虫洞裂隙：锋面中心撕开次元裂口，虫群从这一带穿梭显形
-      this.spawnRift(startBase, Math.min(34, 6 + rollDepth * 22));
+      // 倾泻窗口以【秒】为设计参数：虫多窗口长，但封顶 30s——波次拖尾可控，通关判定不再苦等
+      const pourSeconds = Math.min(30, 6 + n * 0.03);
+      // 虫洞裂隙生命周期 = 倾泻窗口 + 收尾余量：裂隙开着时才有虫显形，不再凭空出现
+      this.spawnRift(startBase, pourSeconds + 4);
       for (let i = 0; i < n; i++) {
         // 出生面：双随机近似高斯的超宽幕（±0.85），中密边疏，覆盖大半个半球
         const spread = (this.rand() + this.rand() - 1) * 0.85;
@@ -1495,7 +1496,7 @@ export class Game {
           .addScaledVector(e1, (this.rand() - 0.5) * 0.45)
           .addScaledVector(e2, (this.rand() - 0.5) * 0.45).normalize();
         this.spawnWingUnit(dir, city.cellId, WING_ALT,
-          this.rand() * rollDepth * 1.3,
+          this.rand() * pourSeconds,
           1.2 + this.rand() * 0.2, tgt);
       }
     }
@@ -1546,23 +1547,25 @@ export class Game {
     this.rifts = this.rifts.filter((rf) => rf.ttl > 0);
   }
 
-  /** 生成单只蜂群：startRadius > 巡航高度时为"虫巢流"（俯冲进场 + 螺旋队形） */
-  private spawnWingUnit(startDir: THREE.Vector3, cityCell: number, startRadius: number, delayProgress: number, cruiseAlt?: number, targetDir?: THREE.Vector3) {
-    if (this.orbitals.filter((o) => o.kind === 'wing' && o.alive).length > WING_CAP) return;
+  /** 生成单只蜂群。delaySeconds 是【秒】：内部换算成该航线的进度延迟，出生窗口与航程长短无关。 */
+  private spawnWingUnit(startDir: THREE.Vector3, cityCell: number, startRadius: number, delaySeconds: number, cruiseAlt?: number, targetDir?: THREE.Vector3) {
+    if (this.aliveWings >= WING_CAP) return;
     const o = this.baseOrbital('wing', WING_HP);
     o.landCell = cityCell;
     o.basisN = startDir.clone();
     o.basisU = targetDir ?? this.grid.cells[cityCell].center.clone();
     o.orbitAngle = o.basisN.angleTo(o.basisU); // 总航程角
-    o.theta = -delayProgress;                  // 进度（负值 = 延迟出场）
+    // 进度推进速率 = WING_SPEED/orbitAngle（见 updateOrbitals），把秒换算成进度
+    o.theta = -delaySeconds * WING_SPEED / Math.max(o.orbitAngle, 0.2);
     o.dropTimer = startRadius;                 // 出发高度
     o.deployTimer = this.rand() * Math.PI * 2; // 螺旋相位
     o.wingAlt = cruiseAlt ?? (1.2 + this.rand() * 0.16); // 巡航高度（高空层厚海面）
     o.swirlAmp = 0.007 + this.rand() * 0.012;  // 骨架轻微涌动：队形整体推进
     o.group.visible = false;                   // 蜂群走虫海渲染
+    // 先申请视觉槽位：失败则不创建逻辑单位——保证"看得见的 = 打得着的"，绝不出现隐形虫
+    if (!this.swarm.addWing(o as SwarmParent)) return;
     this.orbitals.push(o);
-    // 注册进虫海：与同批上一只蜂群构成骨架连线，视觉虫填充其间
-    this.swarm.addWing(o as SwarmParent, this.currentFront);
+    this.aliveWings++;
   }
 
   /** 虫巢母舰：远轨巨舰，周期性向星球倾泻立体虫群流，倾泻完毕后撤离 */
@@ -1705,9 +1708,11 @@ export class Game {
           .addScaledVector(_wAxis, Math.cos(ph) * amp)
           .addScaledVector(_wSide, Math.sin(ph) * amp);
         if (k >= 1) {
-          // 抵达城市上空：自杀式冲撞
+          // 抵达城市上空：自杀式冲撞。清掉可能残留的旧命中点 → 涟漪从撞击处（当前位置）扩散
           o.phase = 'done';
           o.alive = false;
+          o.hit = undefined;
+          this.aliveWings--;
           this.hitCity(o.landCell, WING_IMPACT_DAMAGE, false);
           this.spawnFlash(o.group.position.clone(), COL_ROSE, 0.012, 0.2);
         }
@@ -1732,9 +1737,8 @@ export class Game {
               const ref2 = Math.abs(cityDir2.y) < 0.95 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
               const te1 = new THREE.Vector3().crossVectors(cityDir2, ref2).normalize();
               const te2 = new THREE.Vector3().crossVectors(cityDir2, te1).normalize();
-              this.currentFront = ++this.frontSeq; // 每批虫巢喷涌 = 一个大群
               for (let w = 0; w < HIVE_SQUAD_SIZE; w++) {
-                // 出生即散开成一片：宽幕喷涌 + 目标散布城市周边
+                // 出生即散开成一片：宽幕喷涌 + 目标散布城市周边；批内 0~6 秒错峰涌出
                 const jitter = new THREE.Vector3(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
                   .multiplyScalar(0.5);
                 const tgt = cityDir2.clone()
@@ -1742,7 +1746,7 @@ export class Game {
                   .addScaledVector(te2, (this.rand() - 0.5) * 0.45).normalize();
                 this.spawnWingUnit(
                   o.orbitAxis.clone().add(jitter).normalize(), city.cellId,
-                  HIVE_RADIUS, this.rand() * HIVE_SQUAD_SIZE * 0.02,
+                  HIVE_RADIUS, this.rand() * 6,
                   1.2 + this.rand() * 0.18, tgt);
               }
               this.spawnRing(o.group.position.clone(), COL_ROSE, 0.12);
@@ -1852,9 +1856,13 @@ export class Game {
       }
       o.pos.copy(o.group.position);
     }
-    // 清理已终结的轨道单位（海量蜂群下数组会无限增长）
+    // 清理已终结的轨道单位（海量蜂群下数组会无限增长）。
+    // 被击落的蜂群 phase 停在 'orbit'，必须单独清，否则尸体永久滞留、拖慢全部扫描循环。
+    // 时序安全：击杀发生在本清理之后（updateTowers/Projectiles），SwarmSea 持有直接引用并在
+    // renderInstances 里读到 !alive 记录死亡，下一帧才走到这里被移出数组。
     this.orbitals = this.orbitals.filter((o) =>
-      !(o.phase === 'done' && (o.kind === 'transport' || !o.alive)));
+      !(o.phase === 'done' && (o.kind === 'transport' || !o.alive))
+      && !(o.kind === 'wing' && !o.alive));
   }
 
   private bossDrop(boss: Orbital) {
@@ -1882,12 +1890,12 @@ export class Game {
   }
 
   /** 离散射击的命中点：塔已选好目标，这里在它的虫云内随机取一点（每发不同 → 打一片而非一个点） */
-  private impactOn(o: Orbital, spread = 0.16): THREE.Vector3 {
+  private impactOn(o: Orbital): THREE.Vector3 {
     if (!o.hit) o.hit = new THREE.Vector3();
-    o.hit.set(
-      o.pos.x + (this.rand() - 0.5) * spread,
-      o.pos.y + (this.rand() - 0.5) * spread,
-      o.pos.z + (this.rand() - 0.5) * spread);
+    // 球内采样（方向归一 × 随机半径），落点不会飘出虫云对角线之外；尺度派生自簇半径
+    const r = Math.cbrt(this.rand()) * CLUSTER_RADIUS * 0.9;
+    o.hit.set(this.rand() - 0.5, this.rand() - 0.5, this.rand() - 0.5)
+      .normalize().multiplyScalar(r).add(o.pos);
     return o.hit;
   }
 
@@ -1895,18 +1903,24 @@ export class Game {
   private laserImpact(o: Orbital): THREE.Vector3 {
     if (!o.hit) o.hit = new THREE.Vector3();
     const t = this.time * 1.9 + o.orbitAngle * 7.0;
+    const roam = CLUSTER_RADIUS * 0.65;
     o.hit.set(
-      o.pos.x + Math.sin(t) * 0.12,
-      o.pos.y + Math.sin(t * 1.31 + 1.0) * 0.12,
-      o.pos.z + Math.cos(t * 0.87) * 0.12);
+      o.pos.x + Math.sin(t) * roam,
+      o.pos.y + Math.sin(t * 1.31 + 1.0) * roam,
+      o.pos.z + Math.cos(t * 0.87) * roam);
     return o.hit;
   }
 
-  damageOrbital(o: Orbital, dmg: number) {
+  /** impact = 本次伤害的命中点：致死一击时它成为死亡涟漪原点（不传则用当前位置，绝不残留陈旧点） */
+  damageOrbital(o: Orbital, dmg: number, impact?: THREE.Vector3) {
     if (!o.alive || o.phase === 'done') return;
     o.hp -= dmg;
     if (o.hp > 0) return;
-    if (o.kind === 'wing' && !o.hit) o.hit = new THREE.Vector3().copy(o.pos); // 兜底命中点
+    if (o.kind === 'wing') {
+      // 致死时总是刷新命中点——旧命中点可能是几秒前另一座塔留下的，会把涟漪原点拉到半个星球外
+      if (!o.hit) o.hit = new THREE.Vector3();
+      o.hit.copy(impact ?? o.pos);
+    }
     if (o.kind === 'transport') {
       this.stats.intercepted++;
       sfx.play('intercept', 120);
@@ -1914,6 +1928,7 @@ export class Game {
     } else if (o.kind === 'wing') {
       // 蜂群算击杀（割草），不算拦截；虫海会让它的虫原地碎裂消散
       o.alive = false;
+      this.aliveWings--;
       this.stats.kills++;
       this.registerKill();
       this.energy += WING_REWARD;
@@ -2198,7 +2213,7 @@ export class Game {
         let target: Orbital | null = null;
         for (const o of this.orbitals) {
           if (!o.alive || o.phase === 'done' || !o.group.visible) continue;
-          if (towerN.angleTo(o.pos.clone().normalize()) > range) continue;
+          if (towerN.angleTo(_scanDir.copy(o.pos).normalize()) > range) continue;
           if (!target || o.kind !== 'transport') target = o;
           if (o.kind === 'transport') { target = o; break; }
         }
@@ -2250,7 +2265,7 @@ export class Game {
           let wing: Orbital | null = null; let bestA = Infinity;
           for (const o of this.orbitals) {
             if (o.kind !== 'wing' || !o.alive || !o.group.visible || o.phase === 'done') continue;
-            const a = towerN.angleTo(o.pos.clone().normalize());
+            const a = towerN.angleTo(_scanDir.copy(o.pos).normalize());
             if (a < range && a < bestA) { bestA = a; wing = o; }
           }
           if (wing) {
@@ -2261,7 +2276,7 @@ export class Game {
             this.spawnFlash(from, COL_CYAN, 0.007, 0.12);
             this.spawnFlash(ip.clone(), COL_ROSE, 0.008, 0.13);
             sfx.play('shoot', 80);
-            this.damageOrbital(wing, this.towerDamage(tw));
+            this.damageOrbital(wing, this.towerDamage(tw), ip);
           }
         }
         continue;
@@ -2299,13 +2314,13 @@ export class Game {
   private updateLaserTower(tw: Tower, towerN: THREE.Vector3, range: number, rateMul: number, dt: number) {
     // 维持/寻找锁定目标
     if (tw.lockTarget && (!tw.lockTarget.alive || tw.lockTarget.phase === 'done'
-      || towerN.angleTo(tw.lockTarget.pos.clone().normalize()) > range)) {
+      || towerN.angleTo(_scanDir.copy(tw.lockTarget.pos).normalize()) > range)) {
       this.clearLock(tw);
     }
     if (!tw.lockTarget) {
       for (const o of this.orbitals) {
         if (!o.alive || o.phase === 'done' || !o.group.visible) continue;
-        if (towerN.angleTo(o.pos.clone().normalize()) <= range) { tw.lockTarget = o; tw.lockT = 0; break; }
+        if (towerN.angleTo(_scanDir.copy(o.pos).normalize()) <= range) { tw.lockTarget = o; tw.lockT = 0; break; }
       }
     }
     const target = tw.lockTarget;
@@ -2315,7 +2330,7 @@ export class Game {
     const ramp = 1 + (tw.lockT / 3) * 1.2; // 1 → 2.2
     // 蜂群目标：命中点在虫云内平滑游走，光束犁过去；死亡涟漪从这里扩散
     const aim = target.kind === 'wing' ? this.laserImpact(target) : target.pos;
-    this.damageOrbital(target, this.towerDamage(tw) * ramp * rateMul * dt);
+    this.damageOrbital(target, this.towerDamage(tw) * ramp * rateMul * dt, aim);
 
     // 持续体积光柱：锁定越久越粗越亮
     if (!tw.beam) {
@@ -2449,7 +2464,7 @@ export class Game {
         this.spawnRing(p.to.clone(), COL_CYAN, 0.06);
         for (const o of this.orbitals) {
           if (!o.alive || o.phase === 'done' || !o.group.visible) continue;
-          if (o.pos.distanceTo(p.to) < p.aoe) this.damageOrbital(o, p.dmg);
+          if (o.pos.distanceTo(p.to) < p.aoe) this.damageOrbital(o, p.dmg, p.to); // 导弹爆心 = 涟漪原点
         }
         this.root.remove(p.mesh);
         this.root.remove(p.trail);
