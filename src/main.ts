@@ -349,10 +349,11 @@ function setHover(cell: Cell | null) {
 
 // ---------- 交互：拖拽旋转（带惯性）、滚轮缩放、悬停拾取 ----------
 // ---------- 游戏逻辑 ----------
-const game = new Game(earthGroup, grid, level, onGameEnd);
+const game = new Game(earthGroup, grid, level, onGameEnd, renderer);
 game.loadout = resolveLoadout(level);
 // 调试钩子（控制台可手动推进/检查状态）
 (window as any).__game = game;
+(window as any).__renderer = renderer;
 (window as any).__grid = grid;
 
 // 关卡名显示在副标题
