@@ -305,6 +305,79 @@
     #ec-desc { font-size: 11px; letter-spacing: 1px; color: rgba(251, 191, 36, 0.7); min-height: 15px; margin-bottom: 14px; }
     #ec-start { width: 100%; }
 
+    /* ===== 战前部署 ===== */
+    #prep {
+      display: none; margin-top: 20px; padding: 20px 24px;
+      background: var(--panel-bg); border: 1px solid var(--cyan-dim);
+      clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
+      width: 680px; text-align: left;
+    }
+    #prep.show { display: block; }
+    #prep-head { display: flex; justify-content: space-between; gap: 24px; }
+    #prep-name { font-size: 22px; letter-spacing: 5px; margin-top: 2px; }
+    #prep-name span { font-size: 11px; letter-spacing: 3px; color: var(--cyan-dim); }
+    #prep-obj { margin-top: 6px; font-size: 11px; letter-spacing: 2px; color: rgba(251, 191, 36, 0.75); }
+    #prep-intel { max-width: 300px; text-align: right; }
+    #intel-chips { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+    .intel-chip {
+      font-size: 10px; letter-spacing: 1px; padding: 3px 8px;
+      color: rgba(34, 211, 238, 0.8); border: 1px solid var(--cyan-faint);
+    }
+    .intel-chip.air { color: rgba(244, 63, 94, 0.85); border-color: rgba(244, 63, 94, 0.3); }
+    .intel-chip.warn {
+      color: var(--rose); border-color: rgba(244, 63, 94, 0.55);
+      text-shadow: 0 0 8px rgba(244, 63, 94, 0.5);
+    }
+    #prep-loadout-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-top: 18px; border-top: 1px solid var(--cyan-faint); padding-top: 12px;
+    }
+    #prep-loadout-row .p-label { margin-bottom: 0; }
+    #prep-count { font-size: 13px; letter-spacing: 2px; color: var(--amber); }
+    #prep-count.full { text-shadow: 0 0 8px rgba(251, 191, 36, 0.6); }
+    #prep-grid {
+      margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    }
+    .prep-card {
+      position: relative; padding: 9px 10px; cursor: pointer;
+      background: rgba(34, 211, 238, 0.04); border: 1px solid var(--cyan-faint);
+      clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+      transition: all 0.15s;
+    }
+    .prep-card:hover { border-color: var(--cyan-dim); background: rgba(34, 211, 238, 0.09); }
+    .prep-card.sel {
+      border-color: rgba(251, 191, 36, 0.6);
+      background: rgba(251, 191, 36, 0.07);
+      box-shadow: inset 0 0 14px rgba(251, 191, 36, 0.1);
+    }
+    .prep-card.locked { opacity: 0.35; cursor: not-allowed; }
+    .prep-card.locked:hover { border-color: var(--cyan-faint); background: rgba(34, 211, 238, 0.04); }
+    .pc-top { display: flex; align-items: baseline; gap: 7px; }
+    .pc-icon { font-size: 16px; text-shadow: 0 0 8px var(--cyan); }
+    .prep-card.sel .pc-icon { color: var(--amber); text-shadow: 0 0 8px var(--amber); }
+    .pc-name { font-size: 12px; letter-spacing: 1px; }
+    .pc-cost {
+      margin-top: 5px; font-size: 11px; color: var(--amber); letter-spacing: 1px;
+      display: flex; justify-content: space-between; align-items: baseline;
+    }
+    .pc-lock { margin-top: 5px; font-size: 10px; color: var(--cyan-dim); letter-spacing: 1px; }
+    .pc-check {
+      position: absolute; top: 5px; right: 8px; font-size: 11px;
+      color: var(--amber); opacity: 0; transition: opacity 0.15s;
+    }
+    .prep-card.sel .pc-check { opacity: 1; }
+    /* 兵种角标（战前部署卡 + 局内建造卡通用） */
+    .kind-tag { font-size: 9px; letter-spacing: 1px; padding: 1px 4px; border: 1px solid; }
+    .kind-tag.ground { color: rgba(251, 191, 36, 0.85); border-color: rgba(251, 191, 36, 0.35); }
+    .kind-tag.air { color: rgba(34, 211, 238, 0.9); border-color: rgba(34, 211, 238, 0.35); }
+    .kind-tag.support { color: rgba(163, 230, 53, 0.85); border-color: rgba(163, 230, 53, 0.3); }
+    #prep-desc {
+      margin-top: 10px; font-size: 11px; letter-spacing: 1px;
+      color: rgba(251, 191, 36, 0.75); min-height: 15px;
+    }
+    #prep-btns { margin-top: 16px; display: flex; gap: 14px; }
+    #prep-start { flex: 1; }
+
     /* ===== 教学提示 ===== */
     #tutorial {
       position: fixed; bottom: 190px; left: 50%; transform: translateX(-50%);
@@ -358,10 +431,12 @@
       bottom: 16px; left: 44px;
       font-size: 11px; letter-spacing: 2px; color: rgba(34, 211, 238, 0.35);
     }
-    #hud-build .tower-card { width: 108px; padding: 10px 12px; }
+    #hud-build .tower-card { width: 104px; padding: 10px 11px; }
     #hud-build .tc-icon { font-size: 18px; }
     #hud-build .tc-name { font-size: 12px; }
-    #hud-build .tc-cost { font-size: 12px; }
+    #hud-build .tc-cost {
+      font-size: 12px; display: flex; justify-content: space-between; align-items: baseline;
+    }
 
     /* ===== 装饰 ===== */
     .corner { position: fixed; width: 26px; height: 26px; z-index: 10; pointer-events: none;
@@ -463,10 +538,36 @@
       <button class="ch-tab" data-ch="2">章节二 · 怪潮篇</button>
     </div>
     <div id="level-grid"></div>
-    <div style="display:flex; gap:14px; margin-top:34px;">
+    <div id="menu-btns" style="display:flex; gap:14px; margin-top:34px;">
       <button class="big-btn primary" id="menu-start">开始作战 // ENGAGE</button>
       <button class="big-btn" id="menu-endless">无尽模式 <span id="endless-best"></span></button>
     </div>
+
+    <!-- 战前部署：关卡情报 + 出击编制选择 -->
+    <div id="prep">
+      <div id="prep-head">
+        <div>
+          <div id="prep-mission" class="p-label">MISSION 01</div>
+          <div id="prep-name">初阵 <span id="prep-sub">FIRST CONTACT</span></div>
+          <div id="prep-obj"></div>
+        </div>
+        <div id="prep-intel">
+          <div class="p-label">威胁情报 THREAT INTEL</div>
+          <div id="intel-chips"></div>
+        </div>
+      </div>
+      <div id="prep-loadout-row">
+        <span class="p-label">出击编制 LOADOUT</span>
+        <span id="prep-count">0 / 8</span>
+      </div>
+      <div id="prep-grid"></div>
+      <div id="prep-desc"></div>
+      <div id="prep-btns">
+        <button class="big-btn" id="prep-back">◂ 返回</button>
+        <button class="big-btn primary" id="prep-start">出击 // ENGAGE</button>
+      </div>
+    </div>
+
     <div id="endless-cfg">
       <div class="ec-row">
         <div class="ec-label">难度 DIFFICULTY</div>

@@ -205,6 +205,8 @@ interface Projectile {
 export class Game {
   phase: Phase = 'idle';
   energy: number;
+  /** 出击编制：本局可建造的塔（战前部署选定，默认 = 关卡推荐编制） */
+  loadout: string[];
   /** 已发起的波数（连续进攻：下一波不等上一波清完） */
   launched = 0;
   private nextWaveT = 0;
@@ -246,6 +248,7 @@ export class Game {
     private renderer: THREE.WebGLRenderer,
   ) {
     this.energy = cfg.startEnergy;
+    this.loadout = [...cfg.towers];
     earthGroup.add(this.root);
     // 实例化渲染池：海量敌人的性能地基（一类怪 = 一次 draw call）
     const D = GROUND_DEFS;
@@ -570,7 +573,7 @@ export class Game {
     const def = TOWER_DEFS.find((d) => d.key === defKey)!;
     const cell = this.grid.cells[cellId];
     const cost = this.effectiveCost(def, cell);
-    if (!this.cfg.towers.includes(defKey)) return { ok: false, reason: '本关未解锁', cost };
+    if (!this.loadout.includes(defKey)) return { ok: false, reason: '未编入出击编制', cost };
     if (this.phase === 'won' || this.phase === 'lost') return { ok: false, reason: '战斗已结束', cost };
     if (this.occupied.has(cellId)) return { ok: false, reason: '区块已占用', cost };
     if (cell.terrain === 'mountain' && def.kind === 'ground')
@@ -2644,8 +2647,7 @@ export class Game {
     for (const c of this.cities) {
       c.bar.style.transform = `scaleX(${c.hp / c.maxHp})`;
     }
-    document.querySelectorAll<HTMLElement>('.tower-card').forEach((card) => {
-      if (card.dataset.locked) return; // 未解锁的卡保持置灰
+    document.querySelectorAll<HTMLElement>('#hud-build .tower-card').forEach((card) => {
       const def = TOWER_DEFS.find((d) => d.key === card.dataset.key)!;
       card.classList.toggle('poor', this.energy < def.cost);
     });

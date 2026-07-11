@@ -7,7 +7,8 @@ import { Game, TOWER_DEFS, type GameStats } from './game';
 import {
   LEVELS, ENDLESS_LEVEL, loadProgress, saveProgress, getSession, setSession,
   DIFF_PRESETS, SWARM_PRESETS, loadEndlessCfg, saveEndlessCfg, buildEndlessTuning,
-  type EndlessDiff, type EndlessSwarm,
+  TOWER_UNLOCKS, armoryFor, loadLoadouts, saveLoadout,
+  type EndlessDiff, type EndlessSwarm, type LevelCfg,
 } from './levels';
 import { sfx } from './sound';
 
@@ -30,6 +31,18 @@ const level = isEndless
     startEnergy: ENDLESS_LEVEL.startEnergy + buildEndlessTuning(endlessCfg).energyAdd,
   }
   : LEVELS[levelId - 1];
+
+// ---------- 出击编制 ----------
+// 优先取该关上次保存的编制（剔除无效/未解锁项），否则用关卡推荐编制。
+function resolveLoadout(lv: LevelCfg): string[] {
+  const pool = armoryFor(progress.unlocked, !!lv.endless);
+  const saved = (loadLoadouts()[lv.id] ?? [])
+    .filter((k) => pool.includes(k) && TOWER_DEFS.some((d) => d.key === k));
+  if (saved.length) return saved.slice(0, lv.slots);
+  return lv.towers.filter((k) => pool.includes(k)).slice(0, lv.slots);
+}
+
+const KIND_LABEL: Record<string, string> = { ground: '对地', air: '对空', support: '辅助' };
 
 // ---------- 常量 ----------
 const COL_CYAN = new THREE.Color('#22d3ee');
@@ -337,6 +350,7 @@ function setHover(cell: Cell | null) {
 // ---------- 交互：拖拽旋转（带惯性）、滚轮缩放、悬停拾取 ----------
 // ---------- 游戏逻辑 ----------
 const game = new Game(earthGroup, grid, level, onGameEnd, renderer);
+game.loadout = resolveLoadout(level);
 // 调试钩子（控制台可手动推进/检查状态）
 (window as any).__game = game;
 (window as any).__renderer = renderer;
@@ -400,7 +414,8 @@ document.getElementById('ov-retry')!.addEventListener('click', () => {
   sfx.play('click'); setSession(level.id, true); location.reload();
 });
 document.getElementById('ov-next')!.addEventListener('click', () => {
-  sfx.play('click'); setSession(level.id + 1, true); location.reload();
+  // 下一关先进战前部署（重载后行星即为新关卡，菜单直接打开部署界面）
+  sfx.play('click'); setSession(level.id + 1, false, true); location.reload();
 });
 document.getElementById('ov-menu')!.addEventListener('click', () => {
   sfx.play('click'); setSession(level.id, false); location.reload();
@@ -416,11 +431,49 @@ const TUTORIAL_STEPS = [
   '敌人会沿地面走向城市，塔会自动开火。[空格] 可随时暂停布防',
 ];
 
-// ---------- 主菜单 ----------
+// ---------- 威胁情报：从波次配置提炼本关敌情（战前部署展示） ----------
+const GROUND_INTEL: Record<string, string> = {
+  swarm: '虫群', runner: '疾行者', armored: '重甲', splitter: '裂变体',
+  crawler: '爬行者', behemoth: '攻城巨兽', shrieker: '尖啸者',
+};
+function threatIntel(lv: LevelCfg): { label: string; cls?: string }[] {
+  if (lv.endless) {
+    return [{ label: '全类型威胁' }, { label: '难度无限递增', cls: 'warn' }, { label: '飞船潮周期来袭', cls: 'warn' }];
+  }
+  const out: { label: string; cls?: string }[] = [];
+  const ground = new Set<string>();
+  let wings = false, divers = false, gunships = false, hives = false, jammers = false, boss = false, tides = 0;
+  for (const w of lv.waves) {
+    for (const d of w.drops) ground.add(d.type);
+    if (w.wings) wings = true;
+    if (w.divers) divers = true;
+    if (w.gunships) gunships = true;
+    if (w.hives) hives = true;
+    if (w.jammers) jammers = true;
+    if (w.boss) boss = true;
+    if (w.tide) tides++;
+  }
+  for (const g of ground) out.push({ label: GROUND_INTEL[g] ?? g });
+  if (wings) out.push({ label: '✈ 飞行蜂群', cls: 'air' });
+  if (divers) out.push({ label: '✈ 俯冲艇', cls: 'air' });
+  if (gunships) out.push({ label: '✈ 炮舰', cls: 'air' });
+  if (hives) out.push({ label: '✈ 虫巢母舰', cls: 'air' });
+  if (jammers) out.push({ label: '⚠ 干扰者', cls: 'air' });
+  if (boss) out.push({ label: '母舰 BOSS', cls: 'warn' });
+  if (tides) out.push({ label: `飞船潮 ×${tides}`, cls: 'warn' });
+  return out;
+}
+
+// ---------- 主菜单 & 战前部署 ----------
 {
   const menu = document.getElementById('menu')!;
   const gridEl = document.getElementById('level-grid')!;
   const flavorEl = document.getElementById('menu-flavor')!;
+  const tabsWrap = document.getElementById('chapter-tabs')!;
+  const menuBtns = document.getElementById('menu-btns')!;
+  const ecPanel = document.getElementById('endless-cfg')!;
+  const prepEl = document.getElementById('prep')!;
+  const prepDesc = document.getElementById('prep-desc')!;
 
   function renderChapter(ch: number) {
     gridEl.innerHTML = '';
@@ -438,8 +491,7 @@ const TUTORIAL_STEPS = [
       card.addEventListener('click', () => {
         if (locked) { sfx.play('deny'); return; }
         sfx.play('click');
-        setSession(lv.id, true);
-        location.reload();
+        openPrep(lv);
       });
       gridEl.appendChild(card);
     }
@@ -454,21 +506,123 @@ const TUTORIAL_STEPS = [
   const curCh = !isEndless && level.chapter === 2 ? 2 : (progress.unlocked > 8 ? 2 : 1);
   tabs.forEach((t) => t.classList.toggle('active', Number(t.dataset.ch) === curCh));
   renderChapter(curCh);
-  document.getElementById('menu-start')!.addEventListener('click', () => {
+
+  // ===== 战前部署：关卡情报 + 出击编制选择 =====
+  let prepLevel: LevelCfg | null = null;
+  let prepSel: string[] = [];
+
+  function openPrep(lv: LevelCfg) {
+    prepLevel = lv;
+    prepSel = resolveLoadout(lv);
+    tabsWrap.style.display = 'none';
+    gridEl.style.display = 'none';
+    menuBtns.style.display = 'none';
+    ecPanel.classList.remove('show');
+    flavorEl.textContent = lv.flavor;
+    prepEl.classList.add('show');
+    renderPrep();
+  }
+  function closePrep() {
+    prepLevel = null;
+    prepEl.classList.remove('show');
+    tabsWrap.style.display = '';
+    gridEl.style.display = '';
+    menuBtns.style.display = '';
+    flavorEl.textContent = level.flavor;
+  }
+
+  function renderPrep() {
+    const lv = prepLevel!;
+    document.getElementById('prep-mission')!.textContent =
+      lv.endless ? 'ENDLESS MODE' : `MISSION ${String(lv.id).padStart(2, '0')} · 战前部署`;
+    document.getElementById('prep-name')!.innerHTML =
+      `${lv.name} <span id="prep-sub">${lv.sub}</span>`;
+    document.getElementById('prep-obj')!.textContent = lv.objective;
+
+    const chipsEl = document.getElementById('intel-chips')!;
+    chipsEl.innerHTML = '';
+    for (const c of threatIntel(lv)) {
+      const el = document.createElement('span');
+      el.className = 'intel-chip' + (c.cls ? ` ${c.cls}` : '');
+      el.textContent = c.label;
+      chipsEl.appendChild(el);
+    }
+
+    const countEl = document.getElementById('prep-count')!;
+    countEl.textContent = `${prepSel.length} / ${lv.slots}`;
+    countEl.classList.toggle('full', prepSel.length >= lv.slots);
+
+    const pool = armoryFor(progress.unlocked, !!lv.endless);
+    const pg = document.getElementById('prep-grid')!;
+    pg.innerHTML = '';
+    for (const def of TOWER_DEFS) {
+      const unlocked = pool.includes(def.key);
+      const sel = prepSel.includes(def.key);
+      const card = document.createElement('div');
+      card.className = 'prep-card' + (sel ? ' sel' : '') + (unlocked ? '' : ' locked');
+      card.innerHTML = unlocked
+        ? `<div class="pc-check">◆</div>
+           <div class="pc-top"><span class="pc-icon">${def.icon}</span><span class="pc-name">${def.name}</span></div>
+           <div class="pc-cost">⚡ ${def.cost} <span class="kind-tag ${def.kind}">${KIND_LABEL[def.kind]}</span></div>`
+        : `<div class="pc-top"><span class="pc-icon">🔒</span><span class="pc-name">${def.name}</span></div>
+           <div class="pc-lock">第 ${TOWER_UNLOCKS[def.key] ?? '?'} 关解锁</div>`;
+      card.addEventListener('mouseenter', () => {
+        prepDesc.textContent = unlocked
+          ? `${def.name} ${def.sub} · ${def.desc}`
+          : `${def.name} · 战役推进至第 ${TOWER_UNLOCKS[def.key]} 关永久解锁`;
+      });
+      card.addEventListener('click', () => {
+        if (!unlocked) { sfx.play('deny'); return; }
+        if (sel) {
+          if (prepSel.length <= 1) { sfx.play('deny'); prepDesc.textContent = '至少要带一种塔出击'; return; }
+          prepSel = prepSel.filter((k) => k !== def.key);
+        } else {
+          if (prepSel.length >= lv.slots) {
+            sfx.play('deny');
+            prepDesc.textContent = `编制已满（上限 ${lv.slots}）——先移除一种塔再编入`;
+            return;
+          }
+          prepSel = [...prepSel, def.key];
+        }
+        sfx.play('click');
+        renderPrep();
+      });
+      pg.appendChild(card);
+    }
+    prepDesc.textContent = `本关最多携带 ${lv.slots} 种塔 · 点击卡片编入 / 移除`;
+  }
+
+  document.getElementById('prep-back')!.addEventListener('click', () => {
     sfx.play('click');
-    if (levelId === progress.unlocked && !session.autostart && !isEndless) {
-      // 直接在当前已加载的行星上开战
+    closePrep();
+  });
+  document.getElementById('prep-start')!.addEventListener('click', () => {
+    if (!prepLevel) return;
+    sfx.play('click');
+    // 编制按塔图鉴顺序规整，快捷键位置稳定
+    const ordered = TOWER_DEFS.map((d) => d.key).filter((k) => prepSel.includes(k));
+    saveLoadout(prepLevel.id, ordered);
+    if (!prepLevel.endless && prepLevel.id === levelId) {
+      // 当前已加载的就是该关行星：直接开战，无需重载
+      game.loadout = ordered;
+      renderBuildBar(ordered);
+      closePrep();
       menu.classList.remove('show');
       startBattle();
     } else {
-      setSession(progress.unlocked, true);
+      setSession(prepLevel.id, true);
       location.reload();
     }
   });
-  // 无尽模式入口：先展开开局设置（难度 × 虫潮规模），出击才开战
+
+  document.getElementById('menu-start')!.addEventListener('click', () => {
+    sfx.play('click');
+    openPrep(LEVELS[Math.min(progress.unlocked, LEVELS.length) - 1]);
+  });
+
+  // 无尽模式入口：先展开开局设置（难度 × 虫潮规模），出击进入战前部署
   document.getElementById('endless-best')!.textContent =
     progress.endlessBest > 0 ? `· 最佳 ${progress.endlessBest} 波` : '';
-  const ecPanel = document.getElementById('endless-cfg')!;
   const ecDesc = document.getElementById('ec-desc')!;
   const ecSel = { ...endlessCfg };
 
@@ -503,12 +657,17 @@ const TUTORIAL_STEPS = [
   document.getElementById('ec-start')!.addEventListener('click', () => {
     sfx.play('click');
     saveEndlessCfg(ecSel);
-    setSession(ENDLESS_LEVEL.id, true);
-    location.reload();
+    openPrep(ENDLESS_LEVEL); // 无尽模式同样走战前部署（确认后重载生成随机行星）
   });
+
   if (session.autostart) {
     setSession(levelId, false); // 消费一次性自动开始标记
     startBattle();
+  } else if (session.prep && !isEndless) {
+    // “下一关”流程：行星已按新关卡加载，直接进入战前部署
+    setSession(levelId, false);
+    menu.classList.add('show');
+    openPrep(level);
   } else {
     menu.classList.add('show');
     flavorEl.textContent = level.flavor;
@@ -563,33 +722,43 @@ function updateTutorial(dt: number) {
   sync();
 }
 
-// ---------- 建造模式（6 塔卡片） ----------
+// ---------- 建造模式（建造栏只显示本局出击编制） ----------
 let selectedDef: string | null = null;
 const buildHint = document.getElementById('build-hint')!;
+let barKeys: string[] = []; // 建造栏当前塔序（快捷键 1-N 按此映射）
 
-// 生成建造卡
-{
+function renderBuildBar(keys: string[]) {
+  barKeys = keys;
   const bar = document.getElementById('hud-build')!;
-  TOWER_DEFS.forEach((def, i) => {
-    const unlocked = level.towers.includes(def.key);
+  bar.innerHTML = '';
+  keys.forEach((key, i) => {
+    const def = TOWER_DEFS.find((d) => d.key === key)!;
     const card = document.createElement('div');
-    card.className = 'panel tower-card' + (unlocked ? '' : ' poor');
+    card.className = 'panel tower-card';
     card.dataset.key = def.key;
-    card.dataset.locked = unlocked ? '' : '1';
     card.innerHTML = `
-      <div class="tc-key">${unlocked ? i + 1 : '🔒'}</div>
+      <div class="tc-key">${i + 1}</div>
       <div class="tc-icon">${def.icon}</div>
       <div class="tc-name">${def.name}</div>
-      <div class="tc-sub">${unlocked ? def.sub : 'LOCKED'}</div>
-      <div class="tc-cost">⚡ ${def.cost}</div>`;
+      <div class="tc-sub">${def.sub}</div>
+      <div class="tc-cost">⚡ ${def.cost} <span class="kind-tag ${def.kind}">${KIND_LABEL[def.kind]}</span></div>`;
     card.addEventListener('click', () => {
-      if (!unlocked) { sfx.play('deny'); return; }
       sfx.play('click');
       selectDef(selectedDef === def.key ? null : def.key);
+    });
+    // 悬停即预览塔说明（未选中任何塔时）
+    card.addEventListener('mouseenter', () => {
+      if (selectedDef) return;
+      buildHint.textContent = `${def.name} // ${def.desc}`;
+      buildHint.classList.add('show');
+    });
+    card.addEventListener('mouseleave', () => {
+      if (!selectedDef) buildHint.classList.remove('show');
     });
     bar.appendChild(card);
   });
 }
+renderBuildBar(game.loadout);
 
 // 建造失败原因提示：短暂变红显示原因后恢复
 let hintResetTimer: ReturnType<typeof setTimeout> | null = null;
@@ -620,8 +789,8 @@ function selectDef(key: string | null) {
 
 window.addEventListener('keydown', (e) => {
   const idx = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5', 'Digit6', 'Digit7', 'Digit8', 'Digit9'].indexOf(e.code);
-  if (idx >= 0 && idx < TOWER_DEFS.length && level.towers.includes(TOWER_DEFS[idx].key)) {
-    selectDef(selectedDef === TOWER_DEFS[idx].key ? null : TOWER_DEFS[idx].key);
+  if (idx >= 0 && idx < barKeys.length) {
+    selectDef(selectedDef === barKeys[idx] ? null : barKeys[idx]);
   }
   if (e.code === 'Escape') { selectDef(null); selectTowerCell(null); }
   if (e.code === 'Space') { e.preventDefault(); setPaused(!paused); }
